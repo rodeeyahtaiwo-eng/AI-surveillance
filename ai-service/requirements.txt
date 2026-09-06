@@ -1,0 +1,42 @@
+# AI service dependencies. Install with Python 3.12 (see docs/setup.md — 3.12 has much
+# better PyTorch/Ultralytics wheel availability than newer CPython releases):
+#   py -3.12 -m venv venv && venv\Scripts\pip install -r requirements.txt
+#
+# ultralytics pulls in a CPU build of torch/torchvision by default on most platforms.
+# For GPU acceleration, install a CUDA-enabled torch build first per
+# https://pytorch.org/get-started/locally/ , then `pip install -r requirements.txt`.
+
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+pydantic-settings==2.5.2
+python-dotenv==1.0.1
+httpx==0.27.2
+ultralytics==8.3.0
+opencv-python-headless==4.10.0.84
+numpy>=1.26,<2.0
+python-multipart==0.0.9
+
+# X3D-S action-recognition refinement (Phase 2H, optional — X3D_ADAPTER=none by
+# default). Verified via `pip install --dry-run` in Phase 2B NOT to touch the
+# torch/torchvision versions ultralytics already installs — see docs/x3d-benchmark.md.
+# Pulls in av, fvcore's own deps (yacs, termcolor, tabulate), iopath's (portalocker),
+# and parameterized transitively — not itemized here, same convention as ultralytics'
+# own transitive deps above.
+pytorchvideo==0.1.5
+fvcore==0.1.5.post20221221
+iopath==0.1.10
+
+# S3D Kinetics-400 (Phase 2R, optional — S3D_ADAPTER=none by default). Uses
+# torchvision.models.video.s3d, already available via the torch/torchvision that
+# ultralytics installs above — no new package needed for this one.
+
+# BLIP image captioning (Phase 2R, optional — CAPTION_ADAPTER=template by default).
+# Verified in Phase 2Q to run on this project's CPU-only machine; see
+# docs/phase2q-s3d-blip-temporal-feasibility.md for measured load/inference time and
+# RAM impact before enabling CAPTION_ADAPTER=blip.
+transformers==5.16.1
+
+# Dev/test only
+pytest==8.3.3
+pytest-asyncio==0.24.0

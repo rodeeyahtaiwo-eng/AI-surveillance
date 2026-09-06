@@ -1,0 +1,81 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Environment secrets (NEVER commit real .env files)
+.env
+.env.local
+.env.*.local
+!.env.example
+!**/.env.example
+
+# Frontend (Next.js)
+frontend/.next/
+frontend/out/
+frontend/build/
+
+# Backend
+backend/dist/
+backend/build/
+
+# Prisma / DB
+# Note: Prisma resolves a relative SQLite `file:` URL against schema.prisma's own
+# directory (database/), not the process cwd — so dev.db and the test DB both land here
+# regardless of which service's .env points at them.
+database/*.db
+database/*.db-journal
+database/tests/
+backend/prisma/*.db
+
+# AI service (Python)
+ai-service/venv/
+ai-service/__pycache__/
+ai-service/**/__pycache__/
+ai-service/*.egg-info/
+ai-service/.pytest_cache/
+video-processing/venv/
+video-processing/__pycache__/
+video-processing/**/__pycache__/
+**/*.pyc
+
+# Downloaded model weights (large binaries — documented in models/README.md, not committed)
+models/*.pt
+models/*.onnx
+models/*.pth
+models/*.bin
+models/weights/
+
+# Training datasets (large binaries, manually downloaded — see docs/x3d-benchmark.md /
+# docs/ai-pipeline.md for provenance; never committed)
+ai-service/datasets/
+
+# Local diagnostic frame captures (Phase 2J) — real camera frames, potentially of a
+# real person; local dev artifact only, never committed. See docs/ai-pipeline.md
+# "Diagnostic frame capture".
+ai-service/diagnostics/
+
+# Media / evidence storage (demo recordings, uploaded videos, evidence clips)
+backend/storage/
+backend/uploads/
+**/media/
+**/evidence/
+
+# Logs
+*.log
+npm-debug.log*
+logs/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.claude/
+
+# Test / coverage
+coverage/
+.nyc_output/
+
+# Docker
+docker/data/

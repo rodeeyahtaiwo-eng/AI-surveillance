@@ -1,0 +1,191 @@
+// Prisma schema — single source of truth for the data model.
+//
+// Provider: SQLite by default (zero-config local dev, no Docker/Postgres required).
+// For production, switch `provider` to "postgresql" and point DATABASE_URL at a
+// running Postgres instance (see docker/docker-compose.yml + docs/database.md).
+//
+// Note: fields that would naturally be enums (status, severity, role, ...) are modeled
+// as `String` rather than Prisma `enum` because SQLite does not support native enums.
+// Allowed values are documented inline and enforced at the API boundary with Zod, so the
+// same schema works unmodified against SQLite (dev) and PostgreSQL (prod).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// --- Users & auth ---------------------------------------------------------
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  /// "ADMIN" | "OPERATOR"
+  role         String   @default("ADMIN")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// --- Cameras ----------------------------------------------------------------
+
+model Camera {
+  id          String   @id @default(cuid())
+  name        String
+  location    String
+  streamUrl   String
+  description String?
+  /// "ONLINE" | "OFFLINE" | "ERROR" | "PROCESSING"
+  status      String   @default("OFFLINE")
+  /// true = demo/sample camera (uploaded file or bundled demo footage), not a real feed
+  isDemo      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  detections    Detection[]
+  actions       Action[]
+  videoSegments VideoSegment[]
+  alerts        Alert[]
+  systemEvents  SystemEvent[]
+}
+
+// --- AI pipeline outputs ------------------------------------------------------
+
+model Detection {
+  id             String   @id @default(cuid())
+  camera         Camera   @relation(fields: [cameraId], references: [id], onDelete: Cascade)
+  cameraId       String
+  /// e.g. "person", "car", "truck", "knife"
+  objectLabel    String
+  confidence     Float
+  /// JSON-encoded [x1, y1, x2, y2] (normalized or pixel coords, see docs/ai-pipeline.md).
+  /// Stored as a String, not Prisma's Json type, because the SQLite connector used for
+  /// local dev doesn't support Json columns; PostgreSQL would support Json natively but
+  /// the schema is kept identical across both providers — see docs/database.md.
+  boundingBox    String
+  /// "REAL" | "DEMO" — see docs/ai-pipeline.md honesty policy
+  mode           String   @default("DEMO")
+  frameTimestamp DateTime
+  createdAt      DateTime @default(now())
+
+  @@index([cameraId, frameTimestamp])
+}
+
+model Action {
+  id          String   @id @default(cuid())
+  camera      Camera   @relation(fields: [cameraId], references: [id], onDelete: Cascade)
+  cameraId    String
+  /// e.g. "walking", "running", "standing", "falling", "fighting", "pushing"
+  label       String
+  confidence  Float
+  /// AI-generated caption for this window, if the captioning stage ran
+  description String?
+  /// "REAL" | "DEMO"
+  mode        String   @default("DEMO")
+  windowStart DateTime
+  windowEnd   DateTime
+  /// Raw 0.0-1.0 threat/escalation score from ai-service's ThreatAssessmentService,
+  /// before the backend Threat Engine maps it to a severity/alert — see
+  /// docs/ai-pipeline.md and src/services/threatEngine.service.ts
+  threatScoreHint Float?
+  createdAt   DateTime @default(now())
+
+  alerts      Alert[]
+
+  @@index([cameraId, windowStart])
+}
+
+model VideoSegment {
+  id         String    @id @default(cuid())
+  camera     Camera    @relation(fields: [cameraId], references: [id], onDelete: Cascade)
+  cameraId   String
+  filePath   String
+  startTime  DateTime
+  endTime    DateTime?
+  isDemo     Boolean   @default(false)
+  createdAt  DateTime  @default(now())
+
+  incidents  Incident[]
+}
+
+// --- Alerts & incidents --------------------------------------------------------
+
+model Alert {
+  id            String    @id @default(cuid())
+  camera        Camera    @relation(fields: [cameraId], references: [id], onDelete: Cascade)
+  cameraId      String
+  action        Action?   @relation(fields: [actionId], references: [id], onDelete: SetNull)
+  actionId      String?
+  /// e.g. "close_contact", "fighting_candidate", "suspicious_activity", "unauthorized_activity"
+  type          String
+  /// "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"
+  severity      String
+  confidence    Float
+  description   String
+  /// "NEW" | "REVIEWED" | "DISMISSED" | "ESCALATED"
+  status        String    @default("NEW")
+  /// "REAL" | "DEMO"
+  mode          String    @default("DEMO")
+  /// threat engine score at time of alert (0.0 - 1.0), see docs/ai-pipeline.md
+  threatScore   Float?
+  incident      Incident? @relation(fields: [incidentId], references: [id], onDelete: SetNull)
+  incidentId    String?
+  notifications Notification[]
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([cameraId, createdAt])
+  @@index([severity, status])
+}
+
+model Incident {
+  id            String    @id @default(cuid())
+  title         String
+  eventType     String
+  /// "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"
+  severity      String
+  confidence    Float
+  aiDescription String?
+  startTime     DateTime
+  endTime       DateTime?
+  /// "UNREVIEWED" | "UNDER_REVIEW" | "CONFIRMED" | "DISMISSED"
+  reviewStatus  String    @default("UNREVIEWED")
+  isDemo        Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  alerts        Alert[]
+  videoSegments VideoSegment[]
+}
+
+// --- Notifications & system events ---------------------------------------------
+
+model Notification {
+  id        String    @id @default(cuid())
+  alert     Alert     @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  alertId   String
+  /// "EMAIL" | "SMS" | "PUSH" | "LOG"
+  channel   String
+  /// "PENDING" | "SENT" | "FAILED"
+  status    String    @default("PENDING")
+  recipient String
+  error     String?
+  sentAt    DateTime?
+  createdAt DateTime  @default(now())
+}
+
+model SystemEvent {
+  id        String   @id @default(cuid())
+  camera    Camera?  @relation(fields: [cameraId], references: [id], onDelete: SetNull)
+  cameraId  String?
+  /// e.g. "camera.online", "camera.offline", "ai_service.error"
+  type      String
+  message   String
+  /// "info" | "warning" | "error"
+  severity  String   @default("info")
+  createdAt DateTime @default(now())
+}

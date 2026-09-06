@@ -1,0 +1,8 @@
+# video-processing dependencies — deliberately lightweight (no torch/ultralytics). This
+# service only captures/samples frames and forwards them to ai-service over HTTP; it
+# could run on a low-power ingestion box separate from the GPU/CPU running inference.
+opencv-python-headless==4.10.0.84
+requests==2.32.3
+python-dotenv==1.0.1
+
+pytest==8.3.3
