@@ -1,3 +1,4 @@
+import re
 from typing import Optional, Tuple
 
 from app.action_recognition.base import ActionObservation
@@ -22,41 +23,72 @@ FAST_MOVEMENT_PX_PER_SEC = 80.0
 MOVEMENT_BONUS = 0.05
 ESCALATION_BONUS_CAP = 0.15
 
-# Knife evidence (Phase 2S, recalibrated Phase 2AB) — see docs/phase2s-threat-
-# reasoning.md and docs/phase2ab-live-stabilization.md. A single "knife" COCO-class
-# detection is NOT reliable enough on its own to be treated as CONFIRMED (Phase 2O/2P
-# found the same general detector also produces "tie"/"scissors" on the same kind of
-# footage) — but Phase 2AB's live testing found that giving it ZERO signal until
-# persistence (K-of-window) is met made a knife feel invisible to the demo for several
-# real seconds. Three tiers now exist, all still gated on a person genuinely being
-# present in the same window (action.metrics "avg_person_count") — a knife with no
-# person/context remains explicitly NOT scored (Phase 2O's own recommendation),
-# unchanged this phase:
-#   1. UNCONFIRMED single-window sighting ("knife_detected", NOT yet persisted) ->
-#      a small, cautious floor -- elevated, but explicitly below the MEDIUM boundary
-#      (0.4, backend/src/config/threatConfig.ts), so it cannot look like a confirmed
-#      alert on the strength of one possibly-wrong frame.
-#   2. CONFIRMED/persistent sighting ("knife_persisted" -- K=2 hits within the trailing
-#      T=4s window, unchanged mechanism, see knife_persistence_min_hits/_window_seconds
-#      in app/config.py and count_recent_frames_with_object_as_of() in
-#      app/common/frame_buffer.py) -> floored to HIGH. A knife the detector has now
-#      seen more than once, with a person in frame, is treated as a real armed-presence
-#      signal, not "ordinary activity" -- this is the Phase 2AB policy change from
-#      Phase 2S's original 0.45 (MEDIUM) floor for this same tier.
-#   3. CONFIRMED sighting + the geometry heuristic ALREADY independently read
-#      aggravating context (close_contact/fighting_candidate) in the same window ->
-#      floored slightly higher again, still HIGH, not invented as CRITICAL -- multi-
-#      signal corroboration can still reach CRITICAL only via the engine's existing,
-#      unchanged proximity/movement/escalation bonuses stacking on top, exactly as
-#      before this phase (see the worked arithmetic in docs/phase2ab-live-
-#      stabilization.md). No tier here ever hard-codes CRITICAL.
-# Every tier is a MAX/floor operation, never additive and never a reduction: it can
-# only raise an already-computed score up to the relevant floor, never invent
-# independently of the geometry heuristic's own reading and never lower it.
+# Knife evidence (Phase 2S) — see docs/phase2s-threat-reasoning.md for the full
+# investigation. A single "knife" COCO-class detection is NOT reliable enough on its
+# own to score (Phase 2O/2P found the same general detector also produces "tie"/
+# "scissors" on the same kind of footage) — this is a FLOOR, applied only once BOTH:
+#   1. persistence confirms it (K-of-window, see knife_persistence_min_hits/
+#      _window_seconds in app/config.py and count_recent_frames_with_object_as_of()
+#      in app/common/frame_buffer.py) — not a one-frame blip, and
+#   2. a person is genuinely present in the same window (action.metrics
+#      "avg_person_count", computed by DemoHeuristicActionRecognizer using the
+#      Phase 2P-deduplicated person count) — a knife with no person/context is
+#      explicitly NOT scored as a threat (Phase 2O's own recommendation).
+# It is a MAX/floor operation, never additive and never a reduction: it can only raise
+# an already-computed score up to the relevant floor, never invent independently of the
+# geometry heuristic's own reading and never lower it.
 KNIFE_AGGRAVATING_LABELS = {"close_contact", "fighting_candidate"}
-KNIFE_DETECTED_UNCONFIRMED_FLOOR = 0.35
-KNIFE_WITH_PERSON_FLOOR = 0.65
+# Knife + person, no corroborating proximity/movement signal — worth an operator's
+# attention (just above the MEDIUM floor) but not proof of an altercation.
+KNIFE_WITH_PERSON_FLOOR = 0.45
+# Knife + person + the geometry heuristic ALREADY independently read close proximity or
+# fast movement in the same window — multi-signal corroboration, floored to HIGH
+# (matching fighting_candidate's own base score exactly — not a fresh number, reusing
+# an already-justified value). Deliberately NOT CRITICAL: no validated evidence exists
+# that this combination confirms actual violence (see docs/phase2s-threat-reasoning.md).
 KNIFE_WITH_AGGRESSIVE_CONTEXT_FLOOR = 0.70
+
+# Phase 2AC — narrow, explicitly-labeled caption-based weapon-keyword corroboration.
+# CONFIRMED GAP (see the current-state audit): the general YOLO detector has a real
+# recall gap on certain knife presentations, while BLIP's raw caption text sometimes
+# correctly names a weapon/violent act the structured detector entirely misses — a real
+# recorded instance ("a woman holding a knife in her hand", three consecutive windows)
+# scored 0.05-0.08 (LOW) because knife_persisted above never had a raw detection to
+# work from. This is NOT a claim that BLIP's free-text understanding is validated —
+# see app/captioning/blip_adapter.py's own hallucination warning (Phase 2Q: BLIP
+# described a mirror that was not in the image). It is a deliberately modest,
+# separately-logged FALLBACK signal for when the primary (grounded) detector comes up
+# empty — never additive, applied only as a MAX/floor exactly like the KNIFE_* floors
+# above, and gated on a person also being present in the window (same person-context
+# policy as the knife floors). This logic is applied in app/services/pipeline.py, AFTER
+# RuleBasedThreatEngine.assess() returns, deliberately kept OUT of assess() itself so
+# the engine's own grounded-detection scoring path stays untouched and this fallback
+# remains auditable and visually distinct (see the "[CAPTION-CORROBORATION: ...]"
+# rationale tag and the dedicated logger.warning call) rather than silently blended
+# into detection-based evidence.
+CAPTION_WEAPON_KEYWORDS = ("knife", "gun", "weapon", "stabbing", "fighting")
+# Deliberately BELOW KNIFE_WITH_PERSON_FLOOR (0.45) — a grounded-but-unpersisted
+# detection is still stronger evidence than free-text caption content — and set exactly
+# at the backend's MEDIUM severity threshold (backend/src/config/threatConfig.ts:
+# MEDIUM >= 0.4): enough to surface the alert for operator attention when the primary
+# detector's recall gap would otherwise leave it at LOW, without asserting the
+# certainty a HIGH (0.65) or CRITICAL (0.85) alert implies from a single, lower-
+# confidence, ungrounded text signal.
+CAPTION_KEYWORD_FLOOR = 0.40
+
+
+def contains_weapon_keyword(text: str) -> Optional[str]:
+    """Returns the first CAPTION_WEAPON_KEYWORDS entry found in `text` (case-
+    insensitive, whole-word match via \\b boundaries so e.g. "gunner" does not match
+    "gun"), or None if none match. Deliberately a small fixed keyword list, not an
+    attempt at general NLP/sentiment understanding."""
+    if not text:
+        return None
+    lowered = text.lower()
+    for keyword in CAPTION_WEAPON_KEYWORDS:
+        if re.search(rf"\b{re.escape(keyword)}\b", lowered):
+            return keyword
+    return None
 
 
 class RuleBasedThreatEngine(ThreatAssessmentAdapter):
@@ -84,15 +116,12 @@ class RuleBasedThreatEngine(ThreatAssessmentAdapter):
             score += MOVEMENT_BONUS
             parts.append(f"fast movement (+{MOVEMENT_BONUS:.2f})")
 
-        # Knife evidence floor (Phase 2S, recalibrated Phase 2AB) — see the constants'
-        # comments above for the full three-tier reasoning. Inert (no-op) for any
-        # ActionObservation that doesn't carry "knife_detected"/"knife_persisted"
-        # metrics at all.
+        # Knife evidence floor (Phase 2S) — see the constants' comments above for the
+        # full reasoning. Inert (no-op) for any ActionObservation that doesn't carry a
+        # "knife_persisted" metric.
         knife_persisted = action.metrics.get("knife_persisted", 0.0) >= 1.0
-        knife_detected = action.metrics.get("knife_detected", 0.0) >= 1.0
         person_present = action.metrics.get("avg_person_count", 0.0) >= 0.5
-
-        if (knife_persisted or knife_detected) and not person_present:
+        if knife_persisted and not person_present:
             parts.append("knife detected but no corroborating person in this window (not scored as elevated)")
         elif knife_persisted and person_present:
             aggravated = action.label in KNIFE_AGGRAVATING_LABELS
@@ -103,19 +132,6 @@ class RuleBasedThreatEngine(ThreatAssessmentAdapter):
                 score = knife_floor
             else:
                 parts.append(f"knife detected (persisted) + person present (already >= {knife_floor:.2f})")
-        elif knife_detected and person_present:
-            # Not yet confirmed by persistence -- a smaller, explicitly cautious floor
-            # (see KNIFE_DETECTED_UNCONFIRMED_FLOOR's comment above).
-            if KNIFE_DETECTED_UNCONFIRMED_FLOOR > score:
-                parts.append(
-                    f"knife detected (unconfirmed, not yet persisted) + person present "
-                    f"-> raised to {KNIFE_DETECTED_UNCONFIRMED_FLOOR:.2f} (cautious, not a confirmed alert)"
-                )
-                score = KNIFE_DETECTED_UNCONFIRMED_FLOOR
-            else:
-                parts.append(
-                    f"knife detected (unconfirmed) + person present (already >= {KNIFE_DETECTED_UNCONFIRMED_FLOOR:.2f})"
-                )
 
         if previous_score is not None and previous_score > 0.25 and score >= previous_score:
             bonus = min(ESCALATION_BONUS_CAP, (score - previous_score) * 0.5 + 0.05)

@@ -1,5 +1,13 @@
 # Phase 2Y — Threat Calibration Audit (evidence-gathering only, no code changed)
 
+> **Context note:** Phase 2X (the geometry fix this audit evaluated) was later
+> reverted (see `phase2x-proximity-geometry-fix.md`), so
+> `scripts/evaluate_phase2y_proximity_calibration.py` (which called the Phase
+> 2X-specific `_proximity_and_speed()` signature) no longer runs against the current
+> codebase and was removed with it. This document's findings — that no single
+> `CLOSE_PROXIMITY_RATIO` value cleanly separated ordinary proximity from the one real
+> dangerous-contact recording — remain a real, historical finding, kept for the record.
+
 **Status: audit only.** No production code, config, or threshold was modified.
 Reproducible via `ai-service/scripts/evaluate_phase2y_proximity_calibration.py`
 (real, read-only, uses the actual Phase 2X `_proximity_and_speed()` against real

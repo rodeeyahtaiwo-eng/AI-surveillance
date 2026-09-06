@@ -7,6 +7,7 @@ import { CameraHero } from "@/components/monitoring/CameraHero";
 import { CameraFeedCard } from "@/components/monitoring/CameraFeedCard";
 import { Card, CardBody } from "@/components/ui/Card";
 import { api, fetcher } from "@/lib/api";
+import { playAlertSound, shouldPlayAlertSound } from "@/lib/alertSound";
 import { useRealtime } from "@/lib/useRealtime";
 import type { Action, Alert, Camera, Detection, SystemStatus } from "@/lib/types";
 
@@ -75,6 +76,11 @@ export default function LiveMonitoringPage() {
     if (event.type === "alert.created" || event.type === "alert.updated") {
       const alert = event.payload as Alert;
       setLatestAlertByCamera((prev) => ({ ...prev, [cameraId]: alert }));
+      // Phase 2AG — audio cue only on genuine creation, never on a later status update
+      // (e.g. REVIEWED/DISMISSED), so acknowledging an alert never re-triggers the sound.
+      if (event.type === "alert.created" && shouldPlayAlertSound(alert)) {
+        playAlertSound();
+      }
     }
   });
 

@@ -11,6 +11,22 @@ from app.schemas import DetectionResult
 CLOSE_PROXIMITY_RATIO = 0.15  # centroid distance < 15% of frame diagonal ~= "close"
 FAST_MOVEMENT_PX_PER_SEC = 80.0  # rough px/sec centroid speed threshold for "running"
 
+# Phase 2AC — minimal cross-frame identity matching for movement_speed. CONFIRMED BUG
+# (see the current-state audit): the previous implementation compared boxes[0] (the
+# highest-CONFIDENCE person box each frame, from _deduplicate_boxes) across consecutive
+# frames as if it were one tracked person. When confidence ranking flips between two
+# DISTINCT people frame-to-frame (empirically: two people posing for a selfie), this
+# computed the distance between two different people's centroids and reported it as
+# "speed" — the confirmed real cause of a false-positive fighting_candidate/CRITICAL
+# alert on a benign selfie-taking pair. This is NOT full re-identification/tracking
+# (out of scope) — just greedy nearest-centroid matching between one frame and the
+# next, rejecting any match farther apart than MAX_MATCH_DISTANCE_RATIO of that frame's
+# own diagonal estimate. Unmatched centroids (a person entering/leaving frame) simply
+# contribute no speed sample for that frame pair, rather than being forced into a
+# spurious match — under-counting speed is preferable to fabricating a cross-person
+# jump as movement.
+MAX_MATCH_DISTANCE_RATIO = 0.5
+
 # Duplicate-box dedup (Phase 2P) — see docs/phase2o-live-system-audit.md for the real
 # incident this fixes: a single person filling most of the frame produced 3 overlapping
 # YOLO "person" boxes that survived YOLO's own internal NMS (which only suppresses
@@ -38,8 +54,6 @@ class DemoHeuristicActionRecognizer(ActionRecognitionAdapter):
         self,
         window: List[Tuple[datetime, List[DetectionResult]]],
         clip_frames: Optional[List[np.ndarray]] = None,
-        frame_width: Optional[int] = None,
-        frame_height: Optional[int] = None,
     ) -> ActionObservation:
         # clip_frames is unused here — this adapter only ever reasons over detection
         # boxes, never raw pixels. Accepting (and ignoring) it is a required, purely
@@ -47,11 +61,6 @@ class DemoHeuristicActionRecognizer(ActionRecognitionAdapter):
         # which calls recognize() the same way regardless of which adapter is
         # configured — it is NOT a behavior change to this class. See
         # app/action_recognition/base.py for why the parameter exists.
-        #
-        # frame_width/frame_height (Phase 2X): the actual decoded camera frame's
-        # dimensions, when known — see _proximity_and_speed()/_frame_diagonal_estimate()
-        # below for why this matters and what happens when it's None (the pre-Phase-2X
-        # fallback, unchanged).
         if not window:
             return ActionObservation(label="no_activity", confidence=0.5, mode="DEMO", metrics={})
 
@@ -69,7 +78,7 @@ class DemoHeuristicActionRecognizer(ActionRecognitionAdapter):
                 metrics={"avg_person_count": avg_persons},
             )
 
-        min_proximity_ratio, movement_speed = _proximity_and_speed(window, frame_width, frame_height)
+        min_proximity_ratio, movement_speed = _proximity_and_speed(window)
 
         metrics = {
             "avg_person_count": avg_persons,
@@ -146,30 +155,47 @@ def _centroid(box: List[float]) -> Tuple[float, float]:
     return (x1 + x2) / 2, (y1 + y2) / 2
 
 
+def _match_centroids(
+    prev_centroids: List[Tuple[float, float]],
+    curr_centroids: List[Tuple[float, float]],
+    max_distance: float,
+) -> List[Tuple[Tuple[float, float], Tuple[float, float]]]:
+    """Greedy nearest-centroid matching between one frame's person centroids and the
+    next's (Phase 2AC) — see MAX_MATCH_DISTANCE_RATIO's comment above for why this
+    exists. For each current centroid (in order), matches it to whichever *unused*
+    previous centroid is closest, but only accepts the match if that distance is within
+    `max_distance`. Deliberately simple/greedy, not an optimal (e.g. Hungarian)
+    assignment — sufficient to stop confidence-ranking flips from being read as
+    movement, without introducing full tracking."""
+    pairs: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
+    remaining_prev = list(prev_centroids)
+    for curr in curr_centroids:
+        if not remaining_prev:
+            break
+        nearest = min(remaining_prev, key=lambda p: _distance(p, curr))
+        # The distance veto only guards against genuine ambiguity -- i.e. a confidence-
+        # ranking flip picking the WRONG one of several candidates (the confirmed bug).
+        # When only one previous centroid remains, it is the only possible
+        # correspondence regardless of distance: a single fast-moving subject covering
+        # real ground between frames is not an identity-confusion case and must not be
+        # discarded as "no match" (confirmed by test_fast_moving_single_person_is_running).
+        if len(remaining_prev) == 1 or _distance(nearest, curr) <= max_distance:
+            pairs.append((nearest, curr))
+            remaining_prev.remove(nearest)
+    return pairs
+
+
 def _proximity_and_speed(
-    window: List[Tuple[datetime, List[DetectionResult]]],
-    frame_width: Optional[int] = None,
-    frame_height: Optional[int] = None,
+    window: List[Tuple[datetime, List[DetectionResult]]]
 ) -> Tuple[float | None, float]:
     """Returns (min pairwise person-centroid distance / frame diagonal, avg centroid
-    movement speed in px/sec across consecutive frames — a rough, unweighted proxy, not
-    per-identity tracking).
-
-    Phase 2X: the "frame diagonal" the distance is normalized against now uses the
-    ACTUAL decoded camera frame's dimensions (`frame_width`/`frame_height`) when known,
-    computed once via `math.hypot(frame_width, frame_height)` — real geometry, not an
-    estimate. When unavailable (None — the pre-Phase-2X default, and every existing
-    caller/test that doesn't pass them), falls back unchanged to
-    `_frame_diagonal_estimate()` below, preserving prior behavior exactly for anyone who
-    doesn't supply real dimensions. See docs/phase2x-proximity-geometry-fix.md for the
-    evidence this fixes (two people on opposite sides of frame, both spanning most of
-    its height, previously read as "close" because the old estimate derived the
-    diagonal from the boxes' own spread rather than the real frame)."""
-    real_diag = math.hypot(frame_width, frame_height) if frame_width and frame_height else None
-
+    movement speed in px/sec across consecutive frames). Speed is computed per matched
+    identity via greedy nearest-centroid matching (Phase 2AC, see _match_centroids) —
+    still not real re-identification/tracking, but no longer compares confidence-ranked
+    array positions across frames as if they were the same person."""
     min_ratio: float | None = None
     speeds: List[float] = []
-    prev_centroid: Tuple[float, float] | None = None
+    prev_centroids: List[Tuple[float, float]] = []
     prev_time: datetime | None = None
 
     for timestamp, detections in window:
@@ -177,7 +203,7 @@ def _proximity_and_speed(
         boxes = [d.bounding_box for d in people]
 
         if len(boxes) >= 2:
-            diag = real_diag if real_diag is not None else _frame_diagonal_estimate(boxes)
+            diag = _frame_diagonal_estimate(boxes)
             for i in range(len(boxes)):
                 for j in range(i + 1, len(boxes)):
                     dist = _distance(_centroid(boxes[i]), _centroid(boxes[j]))
@@ -185,12 +211,16 @@ def _proximity_and_speed(
                     if min_ratio is None or ratio < min_ratio:
                         min_ratio = ratio
 
-        if boxes:
-            centroid = _centroid(boxes[0])
-            if prev_centroid is not None and prev_time is not None:
-                dt = max((timestamp - prev_time).total_seconds(), 0.001)
-                speeds.append(_distance(prev_centroid, centroid) / dt)
-            prev_centroid = centroid
+        curr_centroids = [_centroid(box) for box in boxes]
+
+        if curr_centroids and prev_centroids and prev_time is not None:
+            dt = max((timestamp - prev_time).total_seconds(), 0.001)
+            max_distance = _frame_diagonal_estimate(boxes) * MAX_MATCH_DISTANCE_RATIO
+            for prev_centroid, curr_centroid in _match_centroids(prev_centroids, curr_centroids, max_distance):
+                speeds.append(_distance(prev_centroid, curr_centroid) / dt)
+
+        if curr_centroids:
+            prev_centroids = curr_centroids
             prev_time = timestamp
 
     avg_speed = sum(speeds) / len(speeds) if speeds else 0.0
@@ -202,14 +232,8 @@ def _distance(a: Tuple[float, float], b: Tuple[float, float]) -> float:
 
 
 def _frame_diagonal_estimate(boxes: List[List[float]]) -> float:
-    # FALLBACK ONLY (Phase 2X) — used only when the real frame_width/frame_height are
-    # not available to _proximity_and_speed() (e.g. a caller/test that predates Phase
-    # 2X). Approximates using the spread of all boxes seen; this is the ORIGINAL
-    # pre-Phase-2X estimate, unchanged, kept solely for backward compatibility.
-    # Known weakness this fallback still has (why Phase 2X's real-geometry path is
-    # preferred whenever dimensions are known): two people can appear "close" merely
-    # because both boxes span most of the frame height, inflating this estimate,
-    # regardless of their actual horizontal separation.
+    # No frame dimensions available here — approximate using the spread of all boxes
+    # seen, which is good enough for a relative "close vs. far" ratio.
     xs = [c for box in boxes for c in (box[0], box[2])]
     ys = [c for box in boxes for c in (box[1], box[3])]
     width = max(xs) - min(xs) if xs else 1.0

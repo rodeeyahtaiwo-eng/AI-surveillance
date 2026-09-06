@@ -67,7 +67,20 @@ class Settings(BaseSettings):
     # Phase 2Q measured ~2-4s inference and a ~854MB generation-time RAM spike on this
     # CPU; a cooldown well above the inference cost keeps it a small fraction of total
     # load. Ignored when CAPTION_ADAPTER=template (the default).
-    caption_blip_cooldown_seconds: int = 20
+    #
+    # Phase 2AE — lowered from 20 to 10 for more responsive AI-analysis text, per
+    # explicit request. Confirmed no other coupling: this constant is read in exactly
+    # one place (blip_adapter.py's on_cooldown check). FLAGGED, not hidden: BLIP's
+    # caption() call is still fully synchronous in this codebase (Phase 2AB's
+    # background-threading fix was reverted, see docs/phase2ab-live-stabilization.md's
+    # own "REVERTED" note) — a cache miss still blocks the whole evaluate_window() call
+    # for its measured ~1.8-2.2s (Phase 2AB) / ~2-4s (Phase 2Q) real inference cost on
+    # this CPU. Halving the cooldown roughly doubles how often that stall happens: at
+    # 20s, a ~2s block occupies ~10% of any 20s span; at 10s, the same ~2s block now
+    # occupies ~20% of any 10s span. This is a real, non-hypothetical increase in how
+    # often a camera's frame-processing round-trip will visibly stall for ~2s on this
+    # CPU-only i5-8250U, not just a config-only change.
+    caption_blip_cooldown_seconds: int = 10
 
     # Temporal next-event predictor (Phase 2R) — SUPPLEMENTARY, informational only;
     # RuleBasedThreatEngine never reads ActionResult.temporal_prediction. "none"
@@ -93,7 +106,20 @@ class Settings(BaseSettings):
     # at higher configured rates), and stays safely inside sequence_window_seconds (6s)
     # below — entries older than that are already pruned from the buffer, so this window
     # must not exceed it, or confirming hits could be pruned away before they're counted.
-    knife_persistence_min_hits: int = 2  # K
+    #
+    # Phase 2AD — lowered from 2 to 1 (CONFIRMED GAP, current-state audit): the one real
+    # historical knife-threat scenario in this system's history produced exactly 1
+    # knife-class detection (0.475 conf) in its window, never 2, so the K=2 gate never
+    # engaged, before or after that audit's other fixes. Before lowering this, every
+    # real knife-class Detection row ever logged (27 total, this camera, all history)
+    # was cross-referenced against its nearest caption/context: zero occurred during an
+    # unrelated, knife-free scene -- every one, including every isolated single-hit
+    # instance, corresponds to a real knife-holding test session, confirmed either by
+    # BLIP's own caption in that exact window or by immediate temporal adjacency to
+    # frames that explicitly name it. No noise-level false-positive pattern was found
+    # at the existing 0.45 confidence threshold, so K=1 was adopted directly rather
+    # than the narrower person-gated alternative that was also considered.
+    knife_persistence_min_hits: int = 1  # K
     knife_persistence_window_seconds: int = 4  # T — must be <= sequence_window_seconds
 
     sequence_window_seconds: int = 6

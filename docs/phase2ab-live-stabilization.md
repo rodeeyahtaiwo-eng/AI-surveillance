@@ -1,5 +1,14 @@
 # Phase 2AB — Emergency Live-System Stabilization
 
+> **REVERTED.** Following this phase, the user determined the live demo behavior was
+> worse than the pre-Phase-2W (Phase 2V) baseline and requested a full rollback to that
+> state. All of this phase's changes — BLIP background-threading, generation
+> repetition controls, the structured-sentence-as-primary-caption format, and the
+> three-tier knife floor (0.35/0.65/0.70) — were reverted. The active runtime is back to
+> Phase 2V's synchronous BLIP captioner and the original two-tier knife floor
+> (0.45/0.70). This document is kept as the historical record of what was tried and why
+> it was undone, not as a description of current behavior.
+
 **Status: implemented, tested (229/229 passing).** Targeted fixes only — no
 architecture change, no new model, firearm remains removed, Phase 2T/2X untouched.
 

@@ -10,6 +10,7 @@ import {
   formatRelativeTime,
   isAlertStale,
   isDetectionStale,
+  scoreToSeverity,
   severityStyles,
 } from "@/lib/style";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
@@ -47,6 +48,13 @@ export function CameraHero({
   // Presentation-only judgment of the existing Alert.createdAt — never mutates, never
   // resolves, never affects the Alert record itself (design-reviewed "Option E").
   const alertStale = latestAlert ? isAlertStale(latestAlert.createdAt) : false;
+
+  // Phase 2AF — the live severity badge must derive from the SAME fresh source as the
+  // "Threat score" field (latestAction.threatScoreHint), not from latestAlert.severity
+  // — see scoreToSeverity()'s doc comment in lib/style.ts for the sibling bug this
+  // fixes. null when there's no current action yet, or its score is below the LOW
+  // threshold (matching the backend: no alert would be raised there either).
+  const liveSeverity = latestAction?.threatScoreHint != null ? scoreToSeverity(latestAction.threatScoreHint) : null;
 
   // Ticks once a second so "Objects detected" re-evaluates staleness even when no new
   // WebSocket event has arrived — otherwise a stale entry would only disappear once a
@@ -127,20 +135,31 @@ export function CameraHero({
             badge={latestAlert ? <ModeBadge mode={latestAlert.mode} /> : undefined}
           >
             <Row label="Threat level">
-              {latestAlert ? (
-                // Staleness is presentation only — the Alert record itself (severity,
-                // status, score) is never changed; a stale badge is just visually
-                // de-emphasized so it doesn't read as an ongoing current threat.
-                <span className={alertStale ? "opacity-50" : undefined}>
-                  <SeverityBadge severity={latestAlert.severity} />
-                </span>
+              {/* Phase 2AF fix: derived from the same live latestAction.threatScoreHint
+                  as "Threat score" above (via scoreToSeverity()), not latestAlert.severity
+                  — that badge only updated when a NEW Alert was created, so it froze at
+                  the last alert-worthy severity (e.g. MEDIUM) while the score underneath
+                  it moved freely, producing mismatched combinations like a 0.08 score
+                  still showing MEDIUM. See lib/style.ts's scoreToSeverity() doc comment. */}
+              {liveSeverity ? (
+                <SeverityBadge severity={liveSeverity} />
               ) : (
                 <Muted>No active alert</Muted>
               )}
             </Row>
             <Row label="Threat score">
-              {latestAlert?.threatScore != null ? (
-                <span className="text-slate-200">{latestAlert.threatScore.toFixed(2)}</span>
+              {/* Phase 2AE fix: this must read the latest ACTION's live, per-window
+                  score, not the latest ALERT's — an Alert is only created when a score
+                  crosses scoreToSeverity's LOW threshold (0.2), so reading
+                  latestAlert.threatScore made this field freeze at the last
+                  alert-worthy value (e.g. a transient "running" misclassification's
+                  0.30) through any number of subsequent lower-scoring windows,
+                  including a correctly-computed 0.0 for a genuine no_activity window —
+                  even though the backend was recomputing a fresh score every window the
+                  whole time. latestAction updates on every action.detected broadcast,
+                  unconditionally, so it always reflects the current window. */}
+              {latestAction?.threatScoreHint != null ? (
+                <span className="text-slate-200">{latestAction.threatScoreHint.toFixed(2)}</span>
               ) : (
                 <Muted>—</Muted>
               )}

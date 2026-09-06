@@ -73,6 +73,23 @@ describe("CameraHero", () => {
       <CameraHero
         camera={baseCamera}
         {...defaultProps}
+        // The section's DEMO badge is keyed off latestAlert.mode (unchanged); the
+        // CRITICAL severity badge itself is now keyed off latestAction.threatScoreHint
+        // (Phase 2AF) — both are supplied here so the test still exercises both. mode
+        // is REAL here (distinct from the alert's DEMO) purely so the two independent
+        // ModeBadges in this render don't collide on the same "DEMO" text.
+        latestAction={{
+          id: "act-1",
+          cameraId: "cam-1",
+          label: "fighting_candidate",
+          confidence: 0.6,
+          description: "Sustained aggressive contact — potential fight detected.",
+          mode: "REAL",
+          windowStart: "2026-01-01T00:00:00.000Z",
+          windowEnd: "2026-01-01T00:00:02.000Z",
+          threatScoreHint: 0.9,
+          createdAt: "2026-01-01T00:00:02.000Z",
+        }}
         latestAlert={{
           id: "a1",
           cameraId: "cam-1",
@@ -90,6 +107,152 @@ describe("CameraHero", () => {
     );
     expect(screen.getByText("DEMO")).toBeInTheDocument();
     expect(screen.getByText("CRITICAL")).toBeInTheDocument();
+  });
+
+  // Phase 2AE — fixes a real bug: "Threat score" used to read latestAlert.threatScore,
+  // which only updates when a score crosses the LOW alert threshold (0.2) -- so it
+  // froze at the last alert-worthy value through any number of subsequent
+  // lower-scoring (even 0.0) windows, even though the backend recomputes a fresh score
+  // every window. It must read latestAction.threatScoreHint instead, which updates on
+  // every action.detected broadcast, unconditionally.
+  describe("threat score reflects the live per-window action, not the stale last alert (Phase 2AE)", () => {
+    const action = {
+      id: "act-1",
+      cameraId: "cam-1",
+      label: "no_activity",
+      confidence: 0.6,
+      description: "a woman holding a knife in her hand",
+      mode: "REAL" as const,
+      windowStart: "2026-01-01T00:00:00.000Z",
+      windowEnd: "2026-01-01T00:00:02.000Z",
+      threatScoreHint: 0.0,
+      createdAt: "2026-01-01T00:00:02.000Z",
+    };
+
+    it("shows the latest action's own score, not an older alert's frozen score", () => {
+      render(
+        <CameraHero
+          camera={baseCamera}
+          {...defaultProps}
+          latestAction={action}
+          latestAlert={{
+            id: "a1",
+            cameraId: "cam-1",
+            type: "running",
+            severity: "LOW",
+            confidence: 0.5,
+            description: "Potential running activity detected.",
+            status: "NEW",
+            mode: "REAL",
+            threatScore: 0.3, // an earlier, alert-worthy window -- must NOT be shown now
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          }}
+        />
+      );
+      expect(screen.getByText("0.00")).toBeInTheDocument(); // the CURRENT action's score
+      expect(screen.queryByText("0.30")).not.toBeInTheDocument(); // not the stale alert's
+    });
+
+    it("shows a dash when there is no action yet, even with an old alert present", () => {
+      render(
+        <CameraHero
+          camera={baseCamera}
+          {...defaultProps}
+          latestAction={null}
+          latestAlert={{
+            id: "a1",
+            cameraId: "cam-1",
+            type: "running",
+            severity: "LOW",
+            confidence: 0.5,
+            description: "Potential running activity detected.",
+            status: "NEW",
+            mode: "REAL",
+            threatScore: 0.3,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          }}
+        />
+      );
+      expect(screen.queryByText("0.30")).not.toBeInTheDocument();
+    });
+  });
+
+  // Phase 2AF — fixes the sibling of the Phase 2AE bug: "Threat level" used to read
+  // latestAlert.severity, which only updates when a NEW Alert is created -- so the
+  // badge froze at the last alert-worthy severity (e.g. MEDIUM, from an earlier 0.30
+  // "running" misclassification) while the "Threat score" field (already fixed) moved
+  // freely underneath it, producing mismatched combinations like a real 0.08
+  // knife-holding window still showing a MEDIUM badge. It must now derive from
+  // scoreToSeverity(latestAction.threatScoreHint) -- the exact same live source and
+  // function the backend uses to decide alerts.
+  describe("threat level reflects the live per-window action, not the stale last alert (Phase 2AF)", () => {
+    const staleMediumAlert = {
+      id: "a1",
+      cameraId: "cam-1",
+      type: "running",
+      severity: "MEDIUM" as const,
+      confidence: 0.5,
+      description: "Potential running activity detected.",
+      status: "NEW" as const,
+      mode: "REAL" as const,
+      threatScore: 0.45, // an earlier, alert-worthy window
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+
+    it("shows LOW for a real 0.08 knife-holding window, not a stale MEDIUM badge", () => {
+      render(
+        <CameraHero
+          camera={baseCamera}
+          {...defaultProps}
+          latestAction={{
+            id: "act-1",
+            cameraId: "cam-1",
+            label: "walking",
+            confidence: 0.55,
+            description: "a woman holding a knife in her hand",
+            mode: "REAL",
+            windowStart: "2026-01-01T00:05:00.000Z",
+            windowEnd: "2026-01-01T00:05:02.000Z",
+            threatScoreHint: 0.08,
+            createdAt: "2026-01-01T00:05:02.000Z",
+          }}
+          latestAlert={staleMediumAlert}
+        />
+      );
+      expect(screen.getByText("0.08")).toBeInTheDocument();
+      // 0.08 is below the LOW threshold (0.2) entirely -- no badge at all, not MEDIUM.
+      expect(screen.queryByText("MEDIUM")).not.toBeInTheDocument();
+      expect(screen.queryByText("LOW")).not.toBeInTheDocument();
+      expect(screen.getByText("No active alert")).toBeInTheDocument();
+    });
+
+    it("shows a correctly-computed LOW badge matching a fresh 0.25 action score, not the stale MEDIUM alert", () => {
+      render(
+        <CameraHero
+          camera={baseCamera}
+          {...defaultProps}
+          latestAction={{
+            id: "act-2",
+            cameraId: "cam-1",
+            label: "running",
+            confidence: 0.5,
+            description: "a woman walking with a knife",
+            mode: "REAL",
+            windowStart: "2026-01-01T00:05:00.000Z",
+            windowEnd: "2026-01-01T00:05:02.000Z",
+            threatScoreHint: 0.25,
+            createdAt: "2026-01-01T00:05:02.000Z",
+          }}
+          latestAlert={staleMediumAlert}
+        />
+      );
+      expect(screen.getByText("0.25")).toBeInTheDocument();
+      expect(screen.getByText("LOW")).toBeInTheDocument();
+      expect(screen.queryByText("MEDIUM")).not.toBeInTheDocument();
+    });
   });
 
   it("reflects real system status connectivity, not assumed-good defaults", () => {
@@ -133,6 +296,22 @@ describe("CameraHero", () => {
         <CameraHero
           camera={baseCamera}
           {...defaultProps}
+          // Severity is now driven by latestAction (Phase 2AF) — supplied here with a
+          // matching CRITICAL-range score so this test still exercises the badge, while
+          // the "Historical alert" staleness judgment below remains keyed off the
+          // separate, untouched latestAlert.createdAt.
+          latestAction={{
+            id: "act-1",
+            cameraId: "cam-1",
+            label: "fighting_candidate",
+            confidence: 0.9,
+            description: "Sustained aggressive contact — potential fight detected.",
+            mode: "REAL",
+            windowStart: longAgo,
+            windowEnd: longAgo,
+            threatScoreHint: 0.9,
+            createdAt: longAgo,
+          }}
           latestAlert={{ ...alertBase, createdAt: longAgo }}
         />
       );

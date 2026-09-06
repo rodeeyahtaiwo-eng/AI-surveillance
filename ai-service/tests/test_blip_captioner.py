@@ -60,17 +60,10 @@ def test_never_requires_real_weights():
 
 
 def test_generates_a_caption_and_appends_grounded_detections():
-    # Phase 2AB: generation is now dispatched to a background thread so caption()
-    # never blocks (see module docstring); the FIRST call for a cold camera still
-    # returns the "pending" placeholder immediately -- wait for the background
-    # generation, then confirm a second call now sees the real text.
     captioner = BlipCaptioner(processor=FakeBlipProcessor(), model=FakeBlipModel())
-    first = captioner.caption([person()], action(), frame=frame(), camera_id="cam-1")
-    assert "caption pending" in first  # nothing generated yet -- returned instantly
-    captioner.wait_for_pending_generation("cam-1")
-    second = captioner.caption([person()], action(), frame=frame(), camera_id="cam-1")
-    assert "fake caption #1" in second
-    assert "Grounded detections: person." in second
+    result = captioner.caption([person()], action(), frame=frame(), camera_id="cam-1")
+    assert "fake caption #1" in result
+    assert "Grounded detections: person." in result
 
 
 def test_no_grounded_objects_still_produces_a_clear_none_marker():
@@ -91,9 +84,7 @@ def test_cooldown_reuses_the_previous_caption_instead_of_regenerating():
     processor = FakeBlipProcessor()
     captioner = BlipCaptioner(processor=processor, model=FakeBlipModel())
 
-    captioner.caption([person()], action(), frame=frame(), camera_id="cam-1")
-    captioner.wait_for_pending_generation("cam-1")
-    first = captioner.caption([person()], action(), frame=frame(), camera_id="cam-1")  # cooldown active now
+    first = captioner.caption([person()], action(), frame=frame(), camera_id="cam-1")
     second = captioner.caption([person()], action(), frame=frame(), camera_id="cam-1")
 
     assert processor.decode_calls == 1  # BLIP was only actually invoked once
@@ -107,8 +98,6 @@ def test_cooldown_is_tracked_per_camera_not_globally():
 
     captioner.caption([person()], action(), frame=frame(), camera_id="cam-a")
     captioner.caption([person()], action(), frame=frame(), camera_id="cam-b")
-    captioner.wait_for_pending_generation("cam-a")
-    captioner.wait_for_pending_generation("cam-b")
 
     assert processor.decode_calls == 2  # a different camera's cooldown must not block this one
 
@@ -120,12 +109,9 @@ def test_a_generation_failure_falls_back_to_the_previous_caption_and_never_raise
 
     captioner = BlipCaptioner(processor=FakeBlipProcessor(), model=FakeBlipModel())
     captioner.caption([person()], action(), frame=frame(), camera_id="cam-1")  # seed a cached caption
-    captioner.wait_for_pending_generation("cam-1")
     captioner._model = FailingModel()
     captioner._last_eval_at_by_camera["cam-1"] = datetime.now(timezone.utc) - timedelta(hours=1)  # clear cooldown
 
-    captioner.caption([person()], action(), frame=frame(), camera_id="cam-1")  # kicks off the failing generation
-    captioner.wait_for_pending_generation("cam-1")
     result = captioner.caption([person()], action(), frame=frame(), camera_id="cam-1")
     assert "fake caption #1" in result  # fell back to the cached one, did not crash
 
@@ -140,8 +126,6 @@ def test_hallucinated_object_is_never_inserted_into_structured_detections():
     captioner = BlipCaptioner(processor=HallucinatingProcessor(), model=FakeBlipModel())
     real_detections = [person()]  # the real detector found a person -- no mirror, ever
 
-    captioner.caption(real_detections, action(), frame=frame(), camera_id="cam-1")
-    captioner.wait_for_pending_generation("cam-1")
     result = captioner.caption(real_detections, action(), frame=frame(), camera_id="cam-1")
 
     # 1. BLIP still produced its (hallucinated) caption.

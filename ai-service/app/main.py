@@ -67,11 +67,7 @@ async def infer_frame(payload: FrameInferenceRequest, background_tasks: Backgrou
     )
 
     window = pipeline.buffer_store.get(payload.camera_id)
-    # Phase 2X: pass the real decoded frame's dimensions (image.shape is (height,
-    # width, channels)) alongside detections, so proximity geometry can be normalized
-    # against the actual frame — see CameraWindow.add() and demo_heuristic.py.
-    frame_height, frame_width = image.shape[0], image.shape[1]
-    window.add(payload.frame_timestamp, detections, frame_width=frame_width, frame_height=frame_height)
+    window.add(payload.frame_timestamp, detections)
     window.prune(settings.sequence_window_seconds)
 
     # Raw-pixel buffer for X3D-S (Phase 2H) — populated unconditionally (a capped-deque

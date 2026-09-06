@@ -128,4 +128,56 @@ describe("Inference ingestion + Threat Engine", () => {
     expect(notifications).toHaveLength(1);
     expect(notifications[0].status).toBe("SENT");
   });
+
+  // Phase 2AG — BLIP is a general captioner, not trained on this project's action
+  // vocabulary, so a fighting_candidate alert should read a clear action tag ahead of
+  // whatever caption text BLIP produced (which may not mention "fighting" at all).
+  it("prepends a 'Fighting detected' tag to fighting_candidate alerts, without altering the underlying caption", async () => {
+    const auth = await authHeader();
+    const cameraId = await createCamera(auth);
+
+    const ingest = await request(app)
+      .post("/api/inference/actions")
+      .set("x-ingest-key", INGEST_KEY)
+      .send({
+        cameraId,
+        mode: "DEMO",
+        label: "fighting_candidate",
+        confidence: 0.55,
+        description: "a man and woman standing in a room Grounded detections: person.",
+        windowStart: new Date().toISOString(),
+        windowEnd: new Date().toISOString(),
+        threatScore: 0.85,
+      });
+
+    expect(ingest.status).toBe(201);
+    expect(ingest.body.alert.description).toBe(
+      "Fighting detected — a man and woman standing in a room Grounded detections: person."
+    );
+    // The underlying Action record's own description (the caption pipeline's raw
+    // output) must remain completely untouched -- the tag is an Alert-only addition.
+    expect(ingest.body.action.description).toBe("a man and woman standing in a room Grounded detections: person.");
+  });
+
+  it("does not tag alerts for other labels (e.g. close_contact) — scoped to fighting_candidate only", async () => {
+    const auth = await authHeader();
+    const cameraId = await createCamera(auth);
+
+    const ingest = await request(app)
+      .post("/api/inference/actions")
+      .set("x-ingest-key", INGEST_KEY)
+      .send({
+        cameraId,
+        mode: "DEMO",
+        label: "close_contact",
+        confidence: 0.5,
+        description: "a man is standing in a room with a woman Grounded detections: person.",
+        windowStart: new Date().toISOString(),
+        windowEnd: new Date().toISOString(),
+        threatScore: 0.5,
+      });
+
+    expect(ingest.status).toBe(201);
+    expect(ingest.body.alert.description).toBe("a man is standing in a room with a woman Grounded detections: person.");
+  });
 });

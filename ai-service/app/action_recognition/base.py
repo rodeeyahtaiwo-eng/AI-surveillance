@@ -36,14 +36,7 @@ class ActionRecognitionAdapter(ABC):
     `clip_frames` is optional and additive (Phase 2H): a short buffer of raw decoded
     frames for adapters that need actual pixels (e.g. X3D-S), not just detection boxes.
     Existing adapters that only reason over detections (e.g. the geometry heuristic)
-    simply ignore it — this parameter changes nothing for them.
-
-    `frame_width`/`frame_height` are optional and additive (Phase 2X): the actual
-    decoded camera frame's dimensions, when known, for adapters whose geometry needs to
-    be normalized against the real frame (e.g. the geometry heuristic's proximity
-    calculation — see demo_heuristic.py's _proximity_and_speed()). None when unavailable
-    (e.g. existing tests/callers that predate this) — adapters that don't need this
-    simply ignore it, exactly like clip_frames."""
+    simply ignore it — this parameter changes nothing for them."""
 
     mode: str
 
@@ -52,7 +45,5 @@ class ActionRecognitionAdapter(ABC):
         self,
         window: List[Tuple[datetime, List[DetectionResult]]],
         clip_frames: Optional[List[np.ndarray]] = None,
-        frame_width: Optional[int] = None,
-        frame_height: Optional[int] = None,
     ) -> ActionObservation:
         raise NotImplementedError

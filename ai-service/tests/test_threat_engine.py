@@ -80,33 +80,15 @@ def test_knife_persisted_with_no_person_does_not_elevate():
     assert "no corroborating person" in rationale
 
 
-def test_knife_persisted_with_person_raises_to_the_high_floor():
-    # Phase 2AB recalibration: a CONFIRMED (persisted) knife sighting with a person
-    # present is now floored to HIGH (0.65), not MEDIUM (0.45) -- live testing found
-    # the MEDIUM floor let a confirmed knife read as barely-elevated "ordinary
-    # activity". See docs/phase2ab-live-stabilization.md.
+def test_knife_persisted_with_person_raises_to_the_medium_floor():
     engine = RuleBasedThreatEngine()
     score, rationale = engine.assess(
         make_observation("standing", knife_persisted=1.0, avg_person_count=1.0), previous_score=None
     )
-    assert score == 0.65
+    assert score == 0.45
     assert score > 0.05  # materially higher than the unarmed baseline
     assert "knife detected" in rationale
-    assert "raised to 0.65" in rationale
-
-
-def test_knife_detected_but_not_yet_persisted_raises_to_a_cautious_floor_below_medium():
-    # Phase 2AB: a single, unconfirmed knife sighting (raw "knife_detected", not yet
-    # meeting the K-of-window persistence bar) gets a small, explicitly cautious floor
-    # -- elevated, but deliberately kept below the MEDIUM boundary (0.4) so it cannot
-    # read as a confirmed alert on the strength of one possibly-wrong frame.
-    engine = RuleBasedThreatEngine()
-    score, rationale = engine.assess(
-        make_observation("standing", knife_detected=1.0, avg_person_count=1.0), previous_score=None
-    )
-    assert score == 0.35
-    assert score < 0.4  # below backend/src/config/threatConfig.ts's MEDIUM boundary
-    assert "unconfirmed" in rationale
+    assert "raised to 0.45" in rationale
 
 
 def test_knife_persisted_with_close_contact_raises_to_the_high_floor():

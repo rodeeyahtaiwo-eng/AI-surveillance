@@ -234,5 +234,5 @@ def test_knife_pathway_still_works_with_temporal_predictor_enabled(monkeypatch):
     assert result is not None
     action_result, _, _ = result
 
-    assert action_result.threat_score == 0.65  # Phase 2AB-recalibrated confirmed-knife floor, unaffected by temporal predictor being on
+    assert action_result.threat_score == 0.45  # Phase 2S's own floor, unaffected by temporal predictor being on
     assert "knife detected" in action_result.rationale

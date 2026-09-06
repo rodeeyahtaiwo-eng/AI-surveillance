@@ -102,3 +102,29 @@ export function isDetectionStale(frameTimestampIso: string, now: Date = new Date
   const seconds = (now.getTime() - new Date(frameTimestampIso).getTime()) / 1000;
   return seconds > DETECTION_STALENESS_SECONDS;
 }
+
+// Phase 2AF — presentation-only mirror of backend/src/config/threatConfig.ts's
+// THREAT_THRESHOLDS/scoreToSeverity(). Fixes the sibling of the Phase 2AE "Threat
+// score" bug: "Threat level" was reading latestAlert.severity, which only updates when
+// a NEW Alert is created (score clears the LOW threshold, 0.2) -- so the badge froze at
+// whatever severity the last alert-worthy window had (e.g. MEDIUM) while the "Threat
+// score" field (already fixed to read the live latestAction.threatScoreHint) moved
+// freely underneath it, producing mismatched combinations like a 0.08 score still
+// showing a MEDIUM badge. This does NOT change who decides whether an Alert/Incident/
+// notification fires -- that remains exclusively backend/src/services/
+// threatEngine.service.ts, keyed off the persisted Alert record, completely
+// independent of this display-only computation. If the backend's thresholds ever
+// change, this copy must be updated to match -- there is no shared package between
+// frontend and backend to import it from directly (see package.json workspaces; frontend
+// and backend build/bundle separately).
+const THREAT_THRESHOLDS = { LOW: 0.2, MEDIUM: 0.4, HIGH: 0.65, CRITICAL: 0.85 } as const;
+
+/** Mirrors the backend's scoreToSeverity() exactly, for live display only. Returns null
+ * below the LOW threshold, just like the backend (no alert would be raised either). */
+export function scoreToSeverity(score: number): Severity | null {
+  if (score >= THREAT_THRESHOLDS.CRITICAL) return "CRITICAL";
+  if (score >= THREAT_THRESHOLDS.HIGH) return "HIGH";
+  if (score >= THREAT_THRESHOLDS.MEDIUM) return "MEDIUM";
+  if (score >= THREAT_THRESHOLDS.LOW) return "LOW";
+  return null;
+}

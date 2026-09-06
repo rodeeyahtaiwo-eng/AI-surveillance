@@ -16,7 +16,7 @@ from app.detection.mock_adapter import MockDetectionAdapter
 from app.schemas import ActionResult, DetectionResult
 from app.temporal_prediction.base import TemporalPredictionAdapter
 from app.threat.base import ThreatAssessmentAdapter
-from app.threat.rule_based import RuleBasedThreatEngine
+from app.threat.rule_based import CAPTION_KEYWORD_FLOOR, RuleBasedThreatEngine, contains_weapon_keyword
 
 logger = get_logger(__name__)
 
@@ -313,13 +313,7 @@ def evaluate_window(camera_id: str) -> Optional[Tuple[ActionResult, datetime, da
         return None
 
     had_previous = window.last_evaluated_at is not None
-    # Phase 2X — pass the real decoded-frame dimensions (if any camera_id's frames have
-    # supplied them via main.py's window.add() calls) so the geometry heuristic can
-    # normalize proximity against the actual frame instead of a box-derived estimate.
-    # None (the pre-Phase-2X default) is a no-op for adapters that don't use it.
-    observation = get_action_adapter().recognize(
-        entries, frame_width=window.last_frame_width, frame_height=window.last_frame_height
-    )
+    observation = get_action_adapter().recognize(entries)
     observation = maybe_refine_with_x3d(camera_id, observation)
     detections = window.all_detections()
 
@@ -337,14 +331,6 @@ def evaluate_window(camera_id: str) -> Optional[Tuple[ActionResult, datetime, da
         "knife", settings.knife_persistence_window_seconds, reference_time
     ) >= settings.knife_persistence_min_hits
     observation.metrics["knife_persisted"] = 1.0 if knife_persisted else 0.0
-    # Phase 2AB — raw, single-window knife presence (NOT gated by the K-of-window
-    # persistence check above). Lets the threat engine give a single, unconfirmed
-    # sighting a small, cautious signal distinct from "nothing at all", without
-    # touching the persistence mechanism itself (still required, unchanged, for the
-    # higher confirmed-knife floor) — see app/threat/rule_based.py's KNIFE_* constants.
-    observation.metrics["knife_detected"] = 1.0 if any(
-        d.object.lower() == "knife" for d in detections
-    ) else 0.0
 
     clip = clip_buffer_store.get(camera_id)
     latest_frame = clip.snapshot()[-1] if clip.snapshot() else None
@@ -353,6 +339,40 @@ def evaluate_window(camera_id: str) -> Optional[Tuple[ActionResult, datetime, da
     threat_score, rationale = get_threat_adapter().assess(
         observation, window.last_threat_score if had_previous else None
     )
+
+    # Phase 2AC — narrow caption-based weapon-keyword corroboration fallback (see
+    # app/threat/rule_based.py's CAPTION_WEAPON_KEYWORDS docstring for full reasoning).
+    # Reads BLIP's raw caption text directly via get_last_result() — never the
+    # formatted `description` string, so a real detector-grounded object name appended
+    # in "Grounded detections: ..." is never double-counted as a caption-text match.
+    # Applied strictly AFTER assess() returns, as a separate, clearly-logged floor —
+    # never folded into RuleBasedThreatEngine's own scoring path, so this fallback
+    # stays auditable and visibly distinct from real object-detection evidence.
+    # get_last_result is a BlipCaptioner-specific extension, not part of the
+    # CaptioningAdapter interface — getattr()'d defensively so this is a no-op for
+    # TemplateCaptioner/mock adapters, which never produce free-text hallucination risk.
+    get_last_result = getattr(get_caption_adapter(), "get_last_result", None)
+    raw_caption_text = ""
+    if callable(get_last_result):
+        last_result = get_last_result(camera_id)
+        if last_result:
+            raw_caption_text = last_result.get("raw_caption") or ""
+    matched_keyword = contains_weapon_keyword(raw_caption_text)
+    person_present = observation.metrics.get("avg_person_count", 0.0) >= 0.5
+    if matched_keyword and person_present and CAPTION_KEYWORD_FLOOR > threat_score:
+        previous_threat_score = threat_score
+        threat_score = CAPTION_KEYWORD_FLOOR
+        rationale = (
+            f"{rationale} [CAPTION-CORROBORATION (ungrounded, text-only signal, not a "
+            f"verified detection): raw caption matched weapon/violence keyword "
+            f"'{matched_keyword}' + person present -> raised from "
+            f"{previous_threat_score:.2f} to {CAPTION_KEYWORD_FLOOR:.2f}]"
+        )
+        logger.warning(
+            f"[caption-corroboration] camera_id={camera_id} matched_keyword="
+            f"{matched_keyword!r} raw_caption={raw_caption_text!r} threat_score "
+            f"{previous_threat_score:.2f} -> {CAPTION_KEYWORD_FLOOR:.2f}"
+        )
 
     window_start, window_end = window.window_start(), window.window_end()
     window.mark_evaluated(threat_score)

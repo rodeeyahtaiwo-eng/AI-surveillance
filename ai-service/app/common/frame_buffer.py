@@ -18,28 +18,9 @@ class CameraWindow:
         self.last_threat_score: float = 0.0
         self.last_x3d_eval_at: Optional[datetime] = None
         self.last_s3d_eval_at: Optional[datetime] = None
-        # Phase 2X — the most recently seen real decoded-frame dimensions for this
-        # camera, if any were provided to add(). A single camera's resolution is
-        # effectively constant frame-to-frame in practice, so "most recent known" is
-        # used as the whole window's normalization reference (see
-        # app/action_recognition/demo_heuristic.py's _proximity_and_speed()) rather than
-        # storing per-entry dimensions. None until the first add() call that supplies
-        # them — every pre-Phase-2X caller that never does leaves this None forever,
-        # which is the documented fallback trigger, not an error state.
-        self.last_frame_width: Optional[int] = None
-        self.last_frame_height: Optional[int] = None
 
-    def add(
-        self,
-        timestamp: datetime,
-        detections: List[DetectionResult],
-        frame_width: Optional[int] = None,
-        frame_height: Optional[int] = None,
-    ) -> None:
+    def add(self, timestamp: datetime, detections: List[DetectionResult]) -> None:
         self.entries.append((timestamp, detections))
-        if frame_width and frame_height:
-            self.last_frame_width = frame_width
-            self.last_frame_height = frame_height
 
     def prune(self, window_seconds: int) -> None:
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=window_seconds)

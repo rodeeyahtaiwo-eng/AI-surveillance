@@ -1,5 +1,14 @@
 # Phase 2X — Proximity Geometry Normalized Against the Real Frame
 
+> **REVERTED.** This phase's geometry fix made the current-runtime demo materially
+> worse (the real knife/CRITICAL escalation sequence stopped reaching HIGH/CRITICAL at
+> all — see this doc's own "Remaining issues" below, and the Phase 2W/2Y audits that
+> followed). The project was rolled back to the pre-Phase-2X (Phase 2V) geometry —
+> `_frame_diagonal_estimate()`'s box-derived estimate is once again the only proximity
+> calculation in the active runtime; no `frame_width`/`frame_height` plumbing exists.
+> This document is kept as the historical record of what was tried and why it was
+> undone, not as a description of current behavior.
+
 **Status: implemented, tested (8 new tests, 228/228 total passing).** Fixes the geometry
 input only — no threshold, base score, bonus, or severity mapping was changed. A real,
 measured trade-off was found and is reported honestly, not hidden: see "Remaining
