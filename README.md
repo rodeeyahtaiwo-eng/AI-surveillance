@@ -6,4 +6,3 @@ early threat detection. It combines real object detection, geometry-driven actio
 real-time administrator dashboard.
 
 
-Academic/final-year project
