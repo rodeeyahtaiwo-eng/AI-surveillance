@@ -45,10 +45,12 @@ const sections: NavSection[] = [
       { href: "/incidents", label: "Incidents", icon: FileWarning },
     ],
   },
-  {
-    label: "Analytics",
-    items: [{ href: "/analytics", label: "Analytics", icon: BarChart3 }],
-  },
+  // Hidden from nav for tonight's demo — page, endpoint, and logic are untouched and
+  // still fully reachable directly at /analytics. Uncomment to restore the nav entry.
+  // {
+  //   label: "Analytics",
+  //   items: [{ href: "/analytics", label: "Analytics", icon: BarChart3 }],
+  // },
   {
     label: "Administration",
     items: [

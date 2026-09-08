@@ -1,5 +1,6 @@
-from datetime import datetime, timezone
-from typing import List, Optional, Tuple
+from collections import deque
+from datetime import datetime, timedelta, timezone
+from typing import Deque, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -16,7 +17,14 @@ from app.detection.mock_adapter import MockDetectionAdapter
 from app.schemas import ActionResult, DetectionResult
 from app.temporal_prediction.base import TemporalPredictionAdapter
 from app.threat.base import ThreatAssessmentAdapter
-from app.threat.rule_based import CAPTION_KEYWORD_FLOOR, RuleBasedThreatEngine, contains_weapon_keyword
+from app.threat.rule_based import (
+    CAPTION_KEYWORD_FLOOR,
+    CAPTION_KEYWORD_PERSISTED_FLOOR,
+    CAPTION_KEYWORD_PERSISTENCE_MIN_HITS,
+    CAPTION_KEYWORD_PERSISTENCE_WINDOW_SECONDS,
+    RuleBasedThreatEngine,
+    contains_weapon_keyword,
+)
 
 logger = get_logger(__name__)
 
@@ -34,6 +42,47 @@ clip_buffer_store = ClipBufferStore(settings.clip_buffer_max_frames)
 # tuned independently.
 X3D_GATING_LABELS = {"close_contact", "fighting_candidate"}
 
+
+class CaptionKeywordHistoryStore:
+    """Phase 2AH — per-camera trailing history of raw caption text, used ONLY to detect
+    a REPEATED weapon-keyword match across genuinely distinct BLIP generations (see
+    app/threat/rule_based.py's CAPTION_KEYWORD_PERSISTENCE_* constants for the full
+    reasoning). A consecutive run of textually-identical caption strings is collapsed
+    into a single entry rather than counted once per window evaluation — otherwise one
+    fresh BLIP call, reused several times across app/captioning/blip_adapter.py's own
+    cooldown cache, would trivially look like "persisted, independent" evidence, which
+    is exactly the single-mention-wearing-a-persistence-costume outcome this feature
+    exists to avoid. This is a conservative heuristic, not a perfect one: BLIP's
+    generation here is deterministic (greedy decoding, no sampling), so a genuinely
+    fresh call on a near-static scene could coincidentally produce byte-identical text
+    to the previous one and be under-counted as a duplicate — the safer direction for
+    an escalation path, and not something blip_adapter.py's own interface exposes a way
+    to distinguish without modifying it (deliberately left untouched)."""
+
+    def __init__(self) -> None:
+        self._by_camera: Dict[str, Deque[Tuple[datetime, str, Optional[str]]]] = {}
+
+    def record_and_count_recent_matches(
+        self, camera_id: str, timestamp: datetime, raw_caption_text: str, matched_keyword: Optional[str]
+    ) -> Tuple[int, Optional[str]]:
+        """Returns (count of distinct matching entries within the trailing window, the
+        most recent matched keyword within that window — which may differ from
+        `matched_keyword` itself if the CURRENT window's caption no longer matches but
+        an earlier one within the window still does; used so the rationale text always
+        names a real keyword, never "None")."""
+        history = self._by_camera.setdefault(camera_id, deque())
+        if not history or history[-1][1] != raw_caption_text:
+            history.append((timestamp, raw_caption_text, matched_keyword))
+        cutoff = timestamp - timedelta(seconds=CAPTION_KEYWORD_PERSISTENCE_WINDOW_SECONDS)
+        while history and history[0][0] < cutoff:
+            history.popleft()
+        matches = [kw for _, _, kw in history if kw is not None]
+        most_recent = matches[-1] if matches else None
+        return len(matches), most_recent
+
+
+caption_keyword_history = CaptionKeywordHistoryStore()
+
 _detection_adapter: Optional[ObjectDetectionAdapter] = None
 _action_adapter: Optional[ActionRecognitionAdapter] = None
 _x3d_adapter: Optional[ActionRecognitionAdapter] = None
@@ -43,6 +92,11 @@ _s3d_adapter_failed = False  # sticky — see get_s3d_adapter(), mirrors _x3d_ad
 _caption_adapter: Optional[CaptioningAdapter] = None
 _threat_adapter: Optional[ThreatAssessmentAdapter] = None
 _temporal_predictor: Optional[TemporalPredictionAdapter] = None
+# Phase 2AK — cameras whose Markov temporal predictor state has already been
+# bootstrapped from persisted history this process's uptime (or attempted and given up
+# on) — see maybe_bootstrap_temporal_predictor(). Tracked here, not on the predictor
+# itself, so it stays a plain, adapter-agnostic set the pipeline owns.
+_temporal_bootstrapped_cameras: set = set()
 
 
 def get_detection_adapter() -> ObjectDetectionAdapter:
@@ -259,6 +313,41 @@ def maybe_run_s3d(camera_id: str) -> Optional[dict]:
     }
 
 
+def maybe_bootstrap_temporal_predictor(camera_id: str, predictor: TemporalPredictionAdapter) -> None:
+    """Phase 2AK — one-time-per-camera-per-process bootstrap of the Markov predictor's
+    in-memory transition counts from real persisted history, so it doesn't have to
+    relearn from scratch (as few as 2-6 live observations, per the current-state audit)
+    on every ai-service restart. Reuses the adapter's own existing observe() update
+    logic in a loop over historical (label, timestamp) pairs — no new counting
+    algorithm. Read-only against history: this only ever calls observe(), which the
+    predictor already exposes for live traffic; no Action row is read more than once,
+    modified, or created. Best-effort: any failure (backend unreachable, camera never
+    logged before) leaves the predictor exactly as it would have been without this
+    function — cold-start, not broken — and is never retried within this process once
+    attempted, to avoid hammering the backend every window on a persistent failure."""
+    if not settings.temporal_prediction_bootstrap_enabled:
+        return
+    if camera_id in _temporal_bootstrapped_cameras:
+        return
+    _temporal_bootstrapped_cameras.add(camera_id)  # mark attempted regardless of outcome
+
+    from app.services.backend_client import fetch_action_history
+
+    started_at = datetime.now(timezone.utc)
+    history = fetch_action_history(camera_id)
+    if not history:
+        return
+
+    for label, timestamp in history:
+        predictor.observe(camera_id, label, timestamp)
+
+    elapsed_ms = (datetime.now(timezone.utc) - started_at).total_seconds() * 1000
+    logger.info(
+        f"[temporal-bootstrap] camera_id={camera_id} replayed {len(history)} real "
+        f"historical observations into the Markov predictor in {elapsed_ms:.1f}ms"
+    )
+
+
 def maybe_predict_temporal(camera_id: str, current_label: str, timestamp: datetime) -> Optional[dict]:
     """Phase 2R/2T — SUPPLEMENTARY ONLY. Predicts the next label from this camera's
     prior history (NOT including `current_label`, which is only recorded afterward —
@@ -271,6 +360,8 @@ def maybe_predict_temporal(camera_id: str, current_label: str, timestamp: dateti
     predictor = get_temporal_predictor()
     if predictor is None:
         return None
+
+    maybe_bootstrap_temporal_predictor(camera_id, predictor)
 
     predicted = predictor.predict_next(camera_id)
     outcome = predictor.observe(camera_id, current_label, timestamp)
@@ -372,6 +463,37 @@ def evaluate_window(camera_id: str) -> Optional[Tuple[ActionResult, datetime, da
             f"[caption-corroboration] camera_id={camera_id} matched_keyword="
             f"{matched_keyword!r} raw_caption={raw_caption_text!r} threat_score "
             f"{previous_threat_score:.2f} -> {CAPTION_KEYWORD_FLOOR:.2f}"
+        )
+
+    # Phase 2AH — SEPARATE, stronger escalation for a weapon keyword persisting across
+    # multiple genuinely distinct caption generations (see
+    # app/threat/rule_based.py's CAPTION_KEYWORD_PERSISTENCE_* docstring and
+    # CaptionKeywordHistoryStore above). Additive alongside — never a replacement for —
+    # the single-mention floor immediately above, the knife floors, or the geometry
+    # heuristic: it can only ever raise the score further, via the same MAX/floor
+    # pattern used everywhere else in this pipeline. Measured against `reference_time`
+    # (the buffered window's own latest timestamp), matching the knife-persistence
+    # check above, for the same BLIP-latency-immunity reason.
+    distinct_keyword_hit_count, persisted_keyword = caption_keyword_history.record_and_count_recent_matches(
+        camera_id, reference_time, raw_caption_text, matched_keyword
+    )
+    caption_keyword_persisted = distinct_keyword_hit_count >= CAPTION_KEYWORD_PERSISTENCE_MIN_HITS
+    if caption_keyword_persisted and person_present and CAPTION_KEYWORD_PERSISTED_FLOOR > threat_score:
+        previous_threat_score = threat_score
+        threat_score = CAPTION_KEYWORD_PERSISTED_FLOOR
+        rationale = (
+            f"{rationale} [CAPTION-CORROBORATION-PERSISTED (ungrounded, text-only "
+            f"signal, not a verified detection, but weapon/violence keyword "
+            f"'{persisted_keyword}' appeared across {distinct_keyword_hit_count} distinct "
+            f"caption generations within {CAPTION_KEYWORD_PERSISTENCE_WINDOW_SECONDS}s) "
+            f"+ person present -> raised from {previous_threat_score:.2f} to "
+            f"{CAPTION_KEYWORD_PERSISTED_FLOOR:.2f}]"
+        )
+        logger.warning(
+            f"[caption-corroboration-persisted] camera_id={camera_id} matched_keyword="
+            f"{persisted_keyword!r} distinct_hit_count={distinct_keyword_hit_count} "
+            f"raw_caption={raw_caption_text!r} threat_score {previous_threat_score:.2f} "
+            f"-> {CAPTION_KEYWORD_PERSISTED_FLOOR:.2f}"
         )
 
     window_start, window_end = window.window_start(), window.window_end()

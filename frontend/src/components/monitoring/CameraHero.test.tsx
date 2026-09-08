@@ -68,16 +68,16 @@ describe("CameraHero", () => {
     expect(screen.getByText("person × 2")).toBeInTheDocument();
   });
 
-  it("badges the Threat Assessment section DEMO when the underlying alert is simulated — never lets a demo escalation look real", () => {
+  // Phase 2AL — the Current Activity / Threat Assessment ModeBadge (DEMO/REAL) was
+  // removed from display per explicit request; it's documented in the written report
+  // instead. Action.mode/Alert.mode themselves are untouched (still real fields on
+  // real records, still asserted elsewhere) -- this only confirms the badge no longer
+  // renders, while the independent CRITICAL severity badge still does.
+  it("no longer shows a DEMO/REAL mode badge in Threat Assessment, even for a simulated alert — severity still shows", () => {
     render(
       <CameraHero
         camera={baseCamera}
         {...defaultProps}
-        // The section's DEMO badge is keyed off latestAlert.mode (unchanged); the
-        // CRITICAL severity badge itself is now keyed off latestAction.threatScoreHint
-        // (Phase 2AF) — both are supplied here so the test still exercises both. mode
-        // is REAL here (distinct from the alert's DEMO) purely so the two independent
-        // ModeBadges in this render don't collide on the same "DEMO" text.
         latestAction={{
           id: "act-1",
           cameraId: "cam-1",
@@ -105,8 +105,54 @@ describe("CameraHero", () => {
         }}
       />
     );
-    expect(screen.getByText("DEMO")).toBeInTheDocument();
+    expect(screen.queryByText("DEMO")).not.toBeInTheDocument();
+    expect(screen.queryByText("REAL")).not.toBeInTheDocument();
     expect(screen.getByText("CRITICAL")).toBeInTheDocument();
+  });
+
+  it("no longer shows a DEMO/REAL mode badge in Current Activity, but the real action label still shows", () => {
+    render(
+      <CameraHero
+        camera={baseCamera}
+        {...defaultProps}
+        latestAction={{
+          id: "act-2",
+          cameraId: "cam-1",
+          label: "standing",
+          confidence: 0.55,
+          description: "a person standing calmly",
+          mode: "DEMO",
+          windowStart: "2026-01-01T00:00:00.000Z",
+          windowEnd: "2026-01-01T00:00:02.000Z",
+          threatScoreHint: 0.05,
+          createdAt: "2026-01-01T00:00:02.000Z",
+        }}
+      />
+    );
+    expect(screen.queryByText("DEMO")).not.toBeInTheDocument();
+    expect(screen.getByText("standing")).toBeInTheDocument();
+  });
+
+  it("still shows the camera-level isDemo badge, unaffected by the mode-badge removal", () => {
+    render(
+      <CameraHero
+        camera={{ ...baseCamera, isDemo: true }}
+        {...defaultProps}
+        latestAction={{
+          id: "act-3",
+          cameraId: "cam-1",
+          label: "standing",
+          confidence: 0.55,
+          description: "a person standing calmly",
+          mode: "REAL",
+          windowStart: "2026-01-01T00:00:00.000Z",
+          windowEnd: "2026-01-01T00:00:02.000Z",
+          threatScoreHint: 0.05,
+          createdAt: "2026-01-01T00:00:02.000Z",
+        }}
+      />
+    );
+    expect(screen.getByText("DEMO")).toBeInTheDocument(); // the camera-level badge, not a mode badge
   });
 
   // Phase 2AE — fixes a real bug: "Threat score" used to read latestAlert.threatScore,
@@ -252,6 +298,60 @@ describe("CameraHero", () => {
       expect(screen.getByText("0.25")).toBeInTheDocument();
       expect(screen.getByText("LOW")).toBeInTheDocument();
       expect(screen.queryByText("MEDIUM")).not.toBeInTheDocument();
+    });
+  });
+
+  // Phase 2AJ — surfaces the existing Phase 2T temporal prediction as a separate,
+  // clearly-labeled, muted line under the main AI Analysis caption.
+  describe("temporal prediction display (Phase 2AJ)", () => {
+    const actionWithPrediction = {
+      id: "act-temporal",
+      cameraId: "cam-1",
+      label: "standing",
+      confidence: 0.55,
+      description: "a person standing calmly",
+      mode: "REAL" as const,
+      windowStart: "2026-01-01T00:00:00.000Z",
+      windowEnd: "2026-01-01T00:00:02.000Z",
+      threatScoreHint: 0.05,
+      rationale:
+        "base risk for 'standing' = 0.05 = 0.05. Temporal context: current action is " +
+        "'standing'; model predicts 'standing' next (confidence 1.00, based on 6 prior " +
+        "observations for this camera).",
+      createdAt: "2026-01-01T00:00:02.000Z",
+    };
+
+    it("shows the real prediction sentence labeled 'Predicted next', separate from the main caption", () => {
+      render(<CameraHero camera={baseCamera} {...defaultProps} latestAction={actionWithPrediction} />);
+      expect(screen.getByText("a person standing calmly")).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          "Predicted next: current action is 'standing'; model predicts 'standing' next " +
+            "(confidence 1.00, based on 6 prior observations for this camera)."
+        )
+      ).toBeInTheDocument();
+    });
+
+    it("shows no prediction line when the rationale has none (e.g. cold start)", () => {
+      render(
+        <CameraHero
+          camera={baseCamera}
+          {...defaultProps}
+          latestAction={{ ...actionWithPrediction, rationale: "base risk for 'standing' = 0.05 = 0.05." }}
+        />
+      );
+      expect(screen.queryByText(/Predicted next/)).not.toBeInTheDocument();
+    });
+
+    it("shows no prediction line for a pre-migration historical action with no rationale at all", () => {
+      render(
+        <CameraHero
+          camera={baseCamera}
+          {...defaultProps}
+          latestAction={{ ...actionWithPrediction, rationale: undefined }}
+        />
+      );
+      expect(screen.queryByText(/Predicted next/)).not.toBeInTheDocument();
     });
   });
 

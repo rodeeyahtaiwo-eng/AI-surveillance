@@ -51,6 +51,29 @@ model Camera {
   videoSegments VideoSegment[]
   alerts        Alert[]
   systemEvents  SystemEvent[]
+  videoUploads  VideoUpload[]
+}
+
+// Phase 2AM — tracks the lifecycle of one uploaded-video processing job (see
+// src/services/videoUpload.service.ts). Deliberately separate from VideoSegment,
+// which represents a recorded footage segment linked to an Incident after the fact —
+// this model exists purely so the frontend can poll "is my upload still running", and
+// carries no relation to the real Detection/Action/Alert rows the job produces (those
+// are created through the exact same real pipeline/tables a live camera uses, with no
+// special-casing at all).
+model VideoUpload {
+  id           String   @id @default(cuid())
+  camera       Camera   @relation(fields: [cameraId], references: [id], onDelete: Cascade)
+  cameraId     String
+  filePath     String
+  originalName String
+  /// "PENDING" | "PROCESSING" | "DONE" | "FAILED"
+  status       String   @default("PENDING")
+  error        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([cameraId, createdAt])
 }
 
 // --- AI pipeline outputs ------------------------------------------------------
@@ -92,6 +115,14 @@ model Action {
   /// before the backend Threat Engine maps it to a severity/alert — see
   /// docs/ai-pipeline.md and src/services/threatEngine.service.ts
   threatScoreHint Float?
+  /// Full explainable rationale string from ai-service's RuleBasedThreatEngine — the
+  /// same scoring breakdown plus, when a Phase 2T temporal prediction exists, one
+  /// appended "Temporal context: ..." sentence. Display-only: computed and finalized
+  /// entirely in ai-service BEFORE this row is created, never derived from or written
+  /// back into threatScoreHint/severity/alert logic. Was already sent by ai-service
+  /// and validated by the Zod schema; this column just stops it being silently
+  /// dropped on the floor (Phase 2AJ).
+  rationale   String?
   createdAt   DateTime @default(now())
 
   alerts      Alert[]

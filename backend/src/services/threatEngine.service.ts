@@ -1,4 +1,5 @@
 import type { Action } from "@prisma/client";
+import { env } from "../config/env";
 import { prisma } from "../lib/prisma";
 import { scoreToSeverity } from "../config/threatConfig";
 import { broadcast } from "../websocket";
@@ -76,15 +77,34 @@ export async function evaluateAction(action: Action) {
     });
     broadcast("incident.created", incident);
     logger.info(`Incident created for ${severity} alert`, { incidentId: incident.id });
+  }
 
-    // Development notification provider (LOG) — see docs/setup.md for wiring a real
-    // email/SMS/push provider via environment variables.
+  // Phase 2AO Stage 2 — real email for HIGH/CRITICAL (see
+  // services/notification/emailProvider.ts, verified with a real send in Stage 1).
+  // Extended to MEDIUM as a follow-up: this gate is deliberately kept SEPARATE from the
+  // Incident-creation gate above, which stays HIGH/CRITICAL-only and untouched — per
+  // explicit request, only which severities trigger a *notification* changed here, not
+  // scoreToSeverity()/threatConfig.ts's thresholds and not Incident-creation policy. A
+  // MEDIUM alert now emails but does NOT get an Incident. This is the ONLY
+  // dispatchNotification() call site in the app — LOW alerts still never notify (they
+  // stop at Alert.create() above), so there's no other "still uses LOG" path to
+  // preserve. If EMAIL isn't actually configured (SMTP_USER/SMTP_PASS unset),
+  // notification/index.ts's existing "not configured" fallback still applies here
+  // unchanged — this call doesn't newly assume delivery succeeds, it just asks for the
+  // real channel instead of the dev-only one.
+  if (severity === "MEDIUM" || severity === "HIGH" || severity === "CRITICAL") {
     await dispatchNotification({
       alertId: alert.id,
-      channel: "LOG",
-      recipient: "security-team@example.com",
+      channel: "EMAIL",
+      recipient: env.NOTIFY_EMAIL_TO ?? "security-team@example.com",
       subject: `[${alert.severity}] ${alert.type} at ${alert.camera.name}`,
-      message: alert.description,
+      message: [
+        `Camera: ${alert.camera.name}`,
+        `Severity: ${alert.severity} (threat score ${alert.threatScore?.toFixed(2) ?? "n/a"})`,
+        `Detected: ${alert.createdAt.toISOString()}`,
+        "",
+        alert.description,
+      ].join("\n"),
     });
   }
 

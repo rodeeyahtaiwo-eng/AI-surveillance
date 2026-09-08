@@ -8,6 +8,11 @@ os.environ.setdefault("X3D_ADAPTER", "none")  # never load real X3D-S weights in
 os.environ.setdefault("S3D_ADAPTER", "none")  # never load real S3D weights in tests (Phase 2R)
 os.environ.setdefault("CAPTION_ADAPTER", "template")  # never load real BLIP weights in tests (Phase 2R)
 os.environ.setdefault("TEMPORAL_PREDICTION_ADAPTER", "none")  # opt-in per test via monkeypatch (Phase 2R)
+# Phase 2AK — a handful of temporal-reasoning tests inject their own predictor instance
+# directly (monkeypatch.setattr(pipeline, "get_temporal_predictor", ...)), bypassing the
+# "none" default above. Without this, those tests would each attempt a real network
+# call to fetch history from the deliberately-unreachable BACKEND_URL below.
+os.environ.setdefault("TEMPORAL_PREDICTION_BOOTSTRAP_ENABLED", "false")
 # Insulate the suite from a developer's local .env (e.g. left enabled for manual
 # inspection per docs/ai-pipeline.md "Diagnostic frame capture") — tests that want it
 # enabled do so explicitly via monkeypatch, see tests/test_diagnostic_capture.py.

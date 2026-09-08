@@ -7,6 +7,7 @@ import {
   ALERT_STALENESS_SECONDS,
   isDetectionStale,
   DETECTION_STALENESS_SECONDS,
+  extractTemporalContext,
 } from "./style";
 
 describe("severityStyles", () => {
@@ -105,5 +106,30 @@ describe("isDetectionStale", () => {
 
   it("uses a materially shorter window than alert staleness — detections should age out much faster than alerts", () => {
     expect(DETECTION_STALENESS_SECONDS).toBeLessThan(ALERT_STALENESS_SECONDS);
+  });
+});
+
+// Phase 2AJ — surfaces the existing Phase 2T temporal prediction from a real
+// ai-service rationale string. Pure text extraction, not a re-derivation.
+describe("extractTemporalContext", () => {
+  it("extracts the real Phase 2T sentence verbatim, from a real ai-service rationale", () => {
+    const rationale =
+      "base risk for 'standing' = 0.05 = 0.05. Temporal context: current action is " +
+      "'standing'; model predicts 'standing' next (confidence 1.00, based on 6 prior " +
+      "observations for this camera).";
+    expect(extractTemporalContext(rationale)).toBe(
+      "current action is 'standing'; model predicts 'standing' next (confidence 1.00, " +
+        "based on 6 prior observations for this camera)."
+    );
+  });
+
+  it("returns null when the rationale has no temporal context (e.g. cold start, no prior observations yet)", () => {
+    expect(extractTemporalContext("base risk for 'standing' = 0.05 = 0.05.")).toBeNull();
+  });
+
+  it("returns null when there is no rationale at all (pre-migration historical row)", () => {
+    expect(extractTemporalContext(null)).toBeNull();
+    expect(extractTemporalContext(undefined)).toBeNull();
+    expect(extractTemporalContext("")).toBeNull();
   });
 });

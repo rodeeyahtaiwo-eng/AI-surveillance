@@ -103,6 +103,25 @@ export function isDetectionStale(frameTimestampIso: string, now: Date = new Date
   return seconds > DETECTION_STALENESS_SECONDS;
 }
 
+// Phase 2AJ — surfaces the existing Phase 2T temporal-prediction sentence that
+// ai-service's RuleBasedThreatEngine already appends to `rationale`, e.g. "... Temporal
+// context: current action is 'standing'; model predicts 'standing' next (confidence
+// 1.00, based on 6 prior observations for this camera)." Pure text extraction, not a
+// re-derivation: finds the literal marker ai-service's own (unmodified) pipeline.py
+// always emits and returns everything from it onward, verbatim. Returns null when
+// there's no rationale yet (a pre-migration historical row) or no prediction was
+// available for that window (e.g. cold start, or ai-service running a different
+// TEMPORAL_PREDICTION_ADAPTER) -- both are honest "nothing to show" cases, never
+// fabricated.
+const TEMPORAL_CONTEXT_MARKER = "Temporal context:";
+
+export function extractTemporalContext(rationale: string | null | undefined): string | null {
+  if (!rationale) return null;
+  const index = rationale.indexOf(TEMPORAL_CONTEXT_MARKER);
+  if (index === -1) return null;
+  return rationale.slice(index + TEMPORAL_CONTEXT_MARKER.length).trim();
+}
+
 // Phase 2AF — presentation-only mirror of backend/src/config/threatConfig.ts's
 // THREAT_THRESHOLDS/scoreToSeverity(). Fixes the sibling of the Phase 2AE "Threat
 // score" bug: "Threat level" was reading latestAlert.severity, which only updates when

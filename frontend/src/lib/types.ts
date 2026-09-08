@@ -19,6 +19,23 @@ export interface Camera {
   updatedAt: string;
 }
 
+export type VideoUploadStatus = "PENDING" | "PROCESSING" | "DONE" | "FAILED";
+
+// Phase 2AM — tracks an uploaded-video processing job (see
+// backend/src/services/videoUpload.service.ts). Carries no relation to the real
+// Detection/Action/Alert rows the job produces -- those appear in the existing
+// lists/dashboard exactly like a live camera's, with no special handling.
+export interface VideoUpload {
+  id: string;
+  cameraId: string;
+  filePath: string;
+  originalName: string;
+  status: VideoUploadStatus;
+  error?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Detection {
   id: string;
   cameraId: string;
@@ -40,6 +57,9 @@ export interface Action {
   windowStart: string;
   windowEnd: string;
   threatScoreHint?: number | null;
+  // Phase 2AJ — full explainable rationale from ai-service's threat engine, including
+  // a "Temporal context: ..." sentence when a Phase 2T prediction exists. Display-only.
+  rationale?: string | null;
   createdAt: string;
 }
 

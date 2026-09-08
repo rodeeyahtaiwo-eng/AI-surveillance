@@ -96,6 +96,15 @@ class Settings(BaseSettings):
     # incrementally, not recomputed from the raw history each time.
     temporal_prediction_max_history: int = 50
 
+    # Phase 2AK — one-time-per-camera bootstrap of the Markov predictor from the
+    # backend's persisted Action history (see pipeline.py's
+    # maybe_bootstrap_temporal_predictor()). Defaults True for real usage; tests/
+    # conftest.py sets this false so unit tests that inject their own predictor
+    # instance (bypassing TEMPORAL_PREDICTION_ADAPTER=none) never attempt a real network
+    # call, even a fast-failing one against the deliberately-unreachable test
+    # BACKEND_URL — matching this file's existing test-isolation convention.
+    temporal_prediction_bootstrap_enabled: bool = True
+
     yolo_model_path: str = "../models/yolov8n.pt"
     yolo_confidence_threshold: float = 0.45
 

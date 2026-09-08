@@ -33,5 +33,14 @@ export const ingestActionSchema = z.object({
   rationale: z.string().max(2000).optional(),
 });
 
+// Phase 2AK — read-only, ai-service-internal: lets the Markov temporal predictor
+// bootstrap its in-memory transition counts from real persisted history on first use
+// per camera, instead of starting empty on every ai-service restart. Never used by the
+// frontend/browser (same requireIngestKey guard as the rest of this router).
+export const actionHistoryQuerySchema = z.object({
+  cameraId: z.string().min(1),
+});
+
 export type IngestDetectionsInput = z.infer<typeof ingestDetectionsSchema>;
 export type IngestActionInput = z.infer<typeof ingestActionSchema>;
+export type ActionHistoryQuery = z.infer<typeof actionHistoryQuerySchema>;

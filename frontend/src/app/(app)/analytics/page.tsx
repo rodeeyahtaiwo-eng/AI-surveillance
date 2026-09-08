@@ -7,7 +7,7 @@ import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { AlertsOverTimeChart } from "@/components/charts/AlertsOverTimeChart";
 import { CategoryBarChart } from "@/components/charts/CategoryBarChart";
 import { SeverityBarChart } from "@/components/charts/SeverityBarChart";
-import { api, fetcher } from "@/lib/api";
+import { ApiError, fetcher } from "@/lib/api";
 import type { AnalyticsData, Camera } from "@/lib/types";
 
 const RANGES = [
@@ -23,7 +23,7 @@ export default function AnalyticsPage() {
   const { data: camerasRes } = useSWR<{ cameras: Camera[] }>("/cameras", fetcher);
   const from = new Date(Date.now() - rangeDays * 24 * 60 * 60 * 1000).toISOString();
   const query = new URLSearchParams({ from, ...(cameraId ? { cameraId } : {}) }).toString();
-  const { data } = useSWR<AnalyticsData>(`/analytics?${query}`, fetcher, { refreshInterval: 30000 });
+  const { data, error } = useSWR<AnalyticsData>(`/analytics?${query}`, fetcher, { refreshInterval: 30000 });
 
   const cameras = camerasRes?.cameras ?? [];
   const cameraNameById = new Map(cameras.map((c) => [c.id, c.name]));
@@ -59,6 +59,25 @@ export default function AnalyticsPage() {
           </select>
         </div>
 
+        {error ? (
+          // Phase 2AI — this page used to only destructure `data` from useSWR, never
+          // `error` -- so ANY fetch failure (an expired JWT, a network hiccup, the
+          // backend being down) rendered identically to "no data exists at all", via
+          // every panel's own `data?.x ?? []` fallback. The backend/query logic was
+          // confirmed correct by direct testing; this is purely a missing error path.
+          // Showing an explicit message here instead of silently falling through to
+          // the empty-state panels is the whole fix -- no change to the underlying
+          // data-fetching, auth, or query logic.
+          <Card>
+            <CardBody className="py-10 text-center">
+              <p className="text-sm text-red-400">
+                {error instanceof ApiError && error.status === 401
+                  ? "Your session expired. Please log in again."
+                  : "Couldn't load analytics data. Try refreshing the page."}
+              </p>
+            </CardBody>
+          </Card>
+        ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <Card>
             <CardHeader>
@@ -129,6 +148,7 @@ export default function AnalyticsPage() {
             </CardBody>
           </Card>
         </div>
+        )}
       </div>
     </div>
   );

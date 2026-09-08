@@ -7,6 +7,7 @@ import { VideoOff, Wifi, Sparkles } from "lucide-react";
 import type { Action, Alert, Camera, Detection } from "@/lib/types";
 import {
   cameraStatusStyles,
+  extractTemporalContext,
   formatRelativeTime,
   isAlertStale,
   isDetectionStale,
@@ -14,7 +15,7 @@ import {
   severityStyles,
 } from "@/lib/style";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
-import { DemoBadge, ModeBadge, Pill, SeverityBadge } from "@/components/ui/Badge";
+import { DemoBadge, Pill, SeverityBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 
 /**
@@ -55,6 +56,12 @@ export function CameraHero({
   // fixes. null when there's no current action yet, or its score is below the LOW
   // threshold (matching the backend: no alert would be raised there either).
   const liveSeverity = latestAction?.threatScoreHint != null ? scoreToSeverity(latestAction.threatScoreHint) : null;
+
+  // Phase 2AJ — surfaces the existing Phase 2T temporal prediction (see
+  // extractTemporalContext()'s doc comment). Display-only, forward-looking; must never
+  // be confused with a current observation, hence the separate "Predicted next" label
+  // and muted styling below.
+  const temporalContext = extractTemporalContext(latestAction?.rationale);
 
   // Ticks once a second so "Objects detected" re-evaluates staleness even when no new
   // WebSocket event has arrived — otherwise a stale entry would only disappear once a
@@ -102,10 +109,11 @@ export function CameraHero({
 
         {/* AI information panel */}
         <div className="space-y-4">
-          <InfoSection
-            title="Current Activity"
-            badge={latestAction ? <ModeBadge mode={latestAction.mode} /> : undefined}
-          >
+          {/* Phase 2AL — the "DEMO"/"REAL" ModeBadge is removed from display here (and
+              in Threat Assessment below) per explicit request: it will be documented in
+              the written report instead. Action.mode itself, and every downstream field
+              derived from it, is completely untouched — this is display-only. */}
+          <InfoSection title="Current Activity">
             <Row label="Objects detected">
               {objectCounts.size > 0 ? (
                 <div className="flex flex-wrap justify-end gap-1">
@@ -127,13 +135,16 @@ export function CameraHero({
               <p className="text-sm text-slate-300">
                 {latestAction?.description ?? latestAlert?.description ?? "Monitoring..."}
               </p>
+              {temporalContext && (
+                // Phase 2AJ — deliberately smaller/muted and separately labeled from the
+                // main caption above: this is a forward-looking model prediction, never
+                // a current observation, and must never read as one.
+                <p className="mt-1 text-xs italic text-slate-500">Predicted next: {temporalContext}</p>
+              )}
             </div>
           </InfoSection>
 
-          <InfoSection
-            title="Threat Assessment"
-            badge={latestAlert ? <ModeBadge mode={latestAlert.mode} /> : undefined}
-          >
+          <InfoSection title="Threat Assessment">
             <Row label="Threat level">
               {/* Phase 2AF fix: derived from the same live latestAction.threatScoreHint
                   as "Threat score" above (via scoreToSeverity()), not latestAlert.severity

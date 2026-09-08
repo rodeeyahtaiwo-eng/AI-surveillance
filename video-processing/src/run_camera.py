@@ -29,6 +29,13 @@ def main() -> None:
     parser.add_argument("--path", help="Video file path (source=file)")
     parser.add_argument("--url", help="RTSP URL (source=rtsp)")
     parser.add_argument("--max-frames", type=int, default=None, help="Stop after N frames (testing)")
+    parser.add_argument(
+        "--no-loop",
+        action="store_true",
+        help="For --source file: play the file once and stop at the real end, instead "
+        "of FileSource's default indefinite demo loop (Phase 2AM — used for one-shot "
+        "uploaded-video processing jobs, which must actually terminate).",
+    )
     args = parser.parse_args()
 
     if args.source == "webcam":
@@ -36,7 +43,7 @@ def main() -> None:
     elif args.source == "file":
         if not args.path:
             parser.error("--path is required for --source file")
-        source = FileSource(path=args.path)
+        source = FileSource(path=args.path, loop=not args.no_loop)
     else:
         if not args.url:
             parser.error("--url is required for --source rtsp")

@@ -29,7 +29,14 @@ export class ApiError extends Error {
 export async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = getToken();
   const headers = new Headers(options.headers);
-  headers.set("Content-Type", "application/json");
+  // Phase 2AM — a FormData body (e.g. video upload) must NOT get an explicit
+  // Content-Type here: fetch sets multipart/form-data with the correct boundary
+  // itself only when the header is left unset. This path isn't used for uploads
+  // anyway (see uploadVideo(), which needs XHR for progress events), but keeping
+  // apiFetch itself FormData-safe avoids a footgun for any future caller.
+  if (!(options.body instanceof FormData)) {
+    headers.set("Content-Type", "application/json");
+  }
   if (token) headers.set("Authorization", `Bearer ${token}`);
 
   const res = await fetch(`${API_URL}${path}`, { ...options, headers });
@@ -49,6 +56,48 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
  * actual response type, so this stays untyped (`any`) rather than fighting SWR's
  * fetcher/key generic inference across every call site. */
 export const fetcher = (path: string): Promise<any> => apiFetch(path);
+
+// Phase 2AM — dedicated upload helper, not routed through apiFetch: plain fetch has no
+// reliable, broadly-supported way to report upload progress, while XMLHttpRequest's
+// upload.onprogress does, and a real byte-level percentage is worth the extra code
+// here over an indeterminate spinner.
+export function uploadVideo(
+  cameraId: string,
+  file: File,
+  onProgress?: (percent: number) => void
+): Promise<{ upload: import("./types").VideoUpload }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_URL}/cameras/${cameraId}/upload`);
+    const token = getToken();
+    if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+
+    xhr.upload.onprogress = (event) => {
+      if (onProgress && event.lengthComputable) {
+        onProgress(Math.round((event.loaded / event.total) * 100));
+      }
+    };
+
+    xhr.onload = () => {
+      let body: { error?: string; upload?: unknown } = {};
+      try {
+        body = JSON.parse(xhr.responseText);
+      } catch {
+        // non-JSON response (e.g. a proxy error page) -- fall through to the status-based message below
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(body as { upload: import("./types").VideoUpload });
+      } else {
+        reject(new ApiError(xhr.status, body.error ?? `Upload failed with status ${xhr.status}`));
+      }
+    };
+    xhr.onerror = () => reject(new ApiError(0, "Network error during upload"));
+
+    const formData = new FormData();
+    formData.append("video", file);
+    xhr.send(formData);
+  });
+}
 
 export const api = {
   get: <T>(path: string) => apiFetch<T>(path),

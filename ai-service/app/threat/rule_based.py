@@ -77,6 +77,36 @@ CAPTION_WEAPON_KEYWORDS = ("knife", "gun", "weapon", "stabbing", "fighting")
 CAPTION_KEYWORD_FLOOR = 0.40
 
 
+# Phase 2AH — persistence-gated escalation for REPEATED, independently-generated
+# caption weapon-keyword matches — separate from CAPTION_KEYWORD_FLOOR above, which
+# already fires on a single mention. Mirrors the KNIFE_* persistence pattern (multiple
+# independent hits, not a one-frame/one-mention trust jump), applied to the caption
+# signal instead of raw detections. See app/services/pipeline.py's
+# CaptionKeywordHistoryStore for exactly how "distinct" hits are counted (consecutive
+# identical caption text — plausible whenever BLIP's cooldown reuses one cached
+# generation across several window evaluations — is deliberately NOT counted twice).
+#
+# Window sized against the REAL constraint, not the single-detection case's 4s: BLIP
+# cannot produce a second independently-generated caption sooner than one full
+# caption_blip_cooldown_seconds (20s) after the first, so a trailing window anywhere
+# near the knife case's 4s (or even a naive "roughly double" 8-10s) could never
+# observe two genuinely distinct generations at all — it would sit permanently
+# unreachable. 45s comfortably exceeds 2x the 20s cooldown plus this project's own
+# measured real inter-window cadence (~7-10s per evaluate_window() call in live
+# testing), giving two real, independent BLIP generations room to both land inside the
+# window without stretching so far that unrelated, long-separated mentions could
+# combine into a false "persisted" reading.
+CAPTION_KEYWORD_PERSISTENCE_MIN_HITS = 2
+CAPTION_KEYWORD_PERSISTENCE_WINDOW_SECONDS = 45
+# Reaches exactly the HIGH boundary (matching backend/src/config/threatConfig.ts:
+# HIGH >= 0.65) — deliberately not pushed further into HIGH's own range or toward
+# CRITICAL. Even reconfirmed across multiple independent generations, this remains an
+# ungrounded, free-text signal, never a verified detection — repetition earns it a
+# real escalation past CAPTION_KEYWORD_FLOOR's MEDIUM (0.40), but not the certainty a
+# score deeper into HIGH or CRITICAL would imply.
+CAPTION_KEYWORD_PERSISTED_FLOOR = 0.65
+
+
 def contains_weapon_keyword(text: str) -> Optional[str]:
     """Returns the first CAPTION_WEAPON_KEYWORDS entry found in `text` (case-
     insensitive, whole-word match via \\b boundaries so e.g. "gunner" does not match

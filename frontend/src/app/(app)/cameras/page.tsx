@@ -2,12 +2,13 @@
 
 import { useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
-import { Plus, Pencil, Trash2, Power } from "lucide-react";
+import { Plus, Pencil, Trash2, Power, UploadCloud } from "lucide-react";
 import { Topbar } from "@/components/layout/Topbar";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { DemoBadge } from "@/components/ui/Badge";
 import { CameraFormDialog, type CameraFormValues } from "@/components/cameras/CameraFormDialog";
+import { VideoUploadDialog } from "@/components/cameras/VideoUploadDialog";
 import { api, fetcher } from "@/lib/api";
 import { cameraStatusStyles } from "@/lib/style";
 import type { Camera } from "@/lib/types";
@@ -18,6 +19,7 @@ export default function CamerasPage() {
   const { data, isLoading } = useSWR<{ cameras: Camera[] }>("/cameras", fetcher);
   const { mutate } = useSWRConfig();
   const [dialogState, setDialogState] = useState<"closed" | "create" | Camera>("closed");
+  const [uploadCamera, setUploadCamera] = useState<Camera | null>(null);
 
   const cameras = data?.cameras ?? [];
 
@@ -101,6 +103,9 @@ export default function CamerasPage() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-1">
+                        <IconButton title="Upload video for analysis" onClick={() => setUploadCamera(camera)}>
+                          <UploadCloud className="h-4 w-4" />
+                        </IconButton>
                         <IconButton title="Toggle online/offline" onClick={() => handleToggle(camera)}>
                           <Power className="h-4 w-4" />
                         </IconButton>
@@ -128,6 +133,15 @@ export default function CamerasPage() {
           initial={dialogState}
           onClose={() => setDialogState("closed")}
           onSubmit={(values) => handleUpdate(dialogState.id, values)}
+        />
+      )}
+      {uploadCamera && (
+        <VideoUploadDialog
+          camera={uploadCamera}
+          onClose={() => {
+            setUploadCamera(null);
+            mutate("/cameras"); // reflect the camera's status (PROCESSING -> restored/ERROR)
+          }}
         />
       )}
     </div>

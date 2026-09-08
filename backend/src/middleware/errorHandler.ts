@@ -1,4 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
+import { MulterError } from "multer";
 import { ZodError } from "zod";
 import { logger } from "../utils/logger";
 
@@ -30,6 +31,13 @@ export function errorHandler(err: unknown, req: Request, res: Response, next: Ne
       error: "Validation failed",
       issues: err.issues.map((i) => ({ path: i.path.join("."), message: i.message })),
     });
+  }
+
+  // Phase 2AM — multer raises its own error type for upload-specific failures (e.g.
+  // file too large), distinct from our AppError; map it the same way ZodError is
+  // mapped above rather than letting it fall through to a generic 500.
+  if (err instanceof MulterError) {
+    return res.status(400).json({ error: err.message, code: err.code });
   }
 
   if (err instanceof AppError) {

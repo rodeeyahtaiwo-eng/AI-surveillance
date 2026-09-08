@@ -1,18 +1,37 @@
 import { prisma } from "../../lib/prisma";
 import { logger } from "../../utils/logger";
+// Phase 2AO Stage 1 (SMTP/Gmail) -- kept, unused, in case Resend ever needs to be
+// swapped back out. Not imported into `providers` below anymore; see Phase 2AP Stage 2.
+// import { createEmailProviderIfConfigured } from "./emailProvider";
+import { createResendEmailProviderIfConfigured } from "./resendEmailProvider";
 import { LogNotificationProvider } from "./logProvider";
 import type { NotificationProvider } from "./provider";
 
 /**
- * Providers are selected by channel. Only LOG is wired to a real implementation today —
- * EMAIL/SMS/PUSH throw a clear "not configured" error rather than silently pretending to
- * send, until real provider credentials (SMTP, Twilio, Firebase, ...) are added via .env.
- * Swapping in a real provider means adding one class implementing NotificationProvider
- * and registering it here — no changes to callers.
+ * Providers are selected by channel. LOG is always wired; EMAIL is real too, backed by
+ * Resend's HTTPS API (resendEmailProvider.ts) as of Phase 2AP Stage 2 -- only registered
+ * when RESEND_API_KEY is actually configured, otherwise EMAIL falls through to the same
+ * "not configured" path SMS/PUSH still use.
+ *
+ * EMAIL was previously backed by EmailNotificationProvider (Gmail SMTP, port 587 --
+ * emailProvider.ts). Switched to Resend because a real presentation venue's network
+ * blocked outbound SMTP entirely (every send failed with `ENETUNREACH ...:587` -- see
+ * the phase report); Resend rides on ordinary HTTPS (port 443) instead. That file is
+ * untouched and still fully working (see scripts/testSendEmail.ts) -- reverting is a
+ * one-line swap back to `createEmailProviderIfConfigured()` below if Resend is ever not
+ * the right choice.
+ *
+ * Swapping in a different real provider always just means adding one class implementing
+ * NotificationProvider and registering it here — no changes to callers (threatEngine
+ * .service.ts asks for channel: "EMAIL" and has no idea which concrete provider answers
+ * that request).
  */
 const providers: Record<string, NotificationProvider> = {
   LOG: new LogNotificationProvider(),
 };
+
+const emailProvider = createResendEmailProviderIfConfigured();
+if (emailProvider) providers.EMAIL = emailProvider;
 
 export async function dispatchNotification(params: {
   alertId: string;
