@@ -5,4 +5,4 @@ early threat detection. It combines real object detection, geometry-driven actio
 **temporal activity analysis for potential threat/escalation prediction** with a
 real-time administrator dashboard.
 
-
+http://localhost:3000
