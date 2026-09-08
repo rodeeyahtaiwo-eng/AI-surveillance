@@ -13,7 +13,7 @@ Technology stack
 - **AI service:** Python 3.12, FastAPI, Ultralytics YOLOv8 (real object detection),
   geometry-driven demo heuristics for action recognition, templated captioning, a
   transparent rule-based threat scorer
-- **Database:** SQLite (local dev default, zero-config) / PostgreSQL (Docker/production) — one Prisma schema, see [`docs/database.md`](docs/database.md)
+- **Database:** SQLite (local dev default, zero-config) / PostgreSQL (Docker/production)  one Prisma schema
 - **Real-time:** WebSocket event stream (not polling)
 
 
