@@ -5,10 +5,6 @@ early threat detection. It combines real object detection, geometry-driven actio
 **temporal activity analysis for potential threat/escalation prediction** with a
 real-time administrator dashboard.
 
-> analyzes sequences of detected events over time and produces a transparent, rule-based
-> risk score with a human-readable rationale — see [`docs/ai-pipeline.md`](docs/ai-pipeline.md).
-
-
 
 Technology stack
 
