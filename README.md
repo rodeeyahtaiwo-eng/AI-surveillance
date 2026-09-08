@@ -19,4 +19,4 @@ Technology stack
 
 
 
-Academic/final-year project — add a license here if required by your institution.
+Academic/final-year project
